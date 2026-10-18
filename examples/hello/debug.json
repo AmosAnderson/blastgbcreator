@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "commands": [
+    { "op": "breakpoints", "addresses": [336] },
+    { "op": "run", "frames": 1, "maxInstructions": 100 },
+    { "op": "breakpoints", "addresses": [] },
+    { "op": "step", "count": 4 },
+    { "op": "read", "address": 49152, "length": 1 },
+    { "op": "assert", "memory": [{ "address": 49152, "bytes": [42] }], "registers": { "a": 42 } }
+  ]
+}

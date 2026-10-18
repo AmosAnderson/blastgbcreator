@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+.packages/
+.dotnet-home/
+TestResults/
+artifacts/
+*.nupkg
+*.snupkg
+.DS_Store
+examples/**/build/

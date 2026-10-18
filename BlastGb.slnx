@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/eng/">
+    <Project Path="eng/BlastGb.Verify/BlastGb.Verify.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/BlastGb.Cli/BlastGb.Cli.csproj" />
+    <Project Path="src/BlastGb.Core/BlastGb.Core.csproj" />
+    <Project Path="src/BlastGb.Runtime/BlastGb.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BlastGb.Cli.Tests/BlastGb.Cli.Tests.csproj" />
+    <Project Path="tests/BlastGb.Core.Tests/BlastGb.Core.Tests.csproj" />
+    <Project Path="tests/BlastGb.Runtime.Tests/BlastGb.Runtime.Tests.csproj" />
+  </Folder>
+</Solution>

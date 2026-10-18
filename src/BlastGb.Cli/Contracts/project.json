@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blast-gb:schema:project:1",
+  "title": "Blast GB project version 1",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "name",
+    "kind",
+    "output"
+  ],
+  "properties": {
+    "format": {
+      "const": "blast-gb-workspace"
+    },
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "rom",
+        "source",
+        "game"
+      ]
+    },
+    "source": {
+      "$ref": "#/$defs/path"
+    },
+    "game": {
+      "$ref": "#/$defs/path"
+    },
+    "rom": {
+      "$ref": "#/$defs/path"
+    },
+    "output": {
+      "$ref": "#/$defs/path"
+    },
+    "patches": {
+      "$ref": "#/$defs/path"
+    },
+    "fixChecksums": {
+      "type": "boolean",
+      "default": false
+    },
+    "romSize": {
+      "type": "integer",
+      "minimum": 336,
+      "maximum": 8388608
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "game"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "game"
+        ]
+      },
+      "else": {
+        "required": [
+          "source"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Relative path contained in the workspace. Runtime validation rejects traversal, absolute paths, and symlinks."
+    }
+  }
+}

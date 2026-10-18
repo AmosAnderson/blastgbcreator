@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>gb</AssemblyName>
+    <RootNamespace>BlastGb.Cli</RootNamespace>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>gb</ToolCommandName>
+    <PackageId>BlastGb.Tools</PackageId>
+    <Authors>Blast GB Tools contributors</Authors>
+    <Description>Local Game Boy ROM, assembly, debugging, and agent utilities.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/JsonInteger.cs" Link="Serialization/JsonInteger.cs" />
+    <ProjectReference Include="../BlastGb.Core/BlastGb.Core.csproj" />
+    <ProjectReference Include="../BlastGb.Runtime/BlastGb.Runtime.csproj" />
+    <EmbeddedResource Include="Contracts/*.json" />
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../THIRD_PARTY.md" Pack="true" PackagePath="/" />
+    <None Include="../../docs/*.md" Pack="true" PackagePath="docs/" />
+    <None Include="../../third_party/binjgb/LICENSE;../../third_party/binjgb/README.md" Pack="true" PackagePath="third_party/binjgb/" />
+    <None Include="../../third_party/wasmtime/LICENSE;../../third_party/wasmtime/README.md" Pack="true" PackagePath="third_party/wasmtime/" />
+    <None Include="../../examples/hello/README.md;../../examples/hello/*.json" Pack="true" PackagePath="examples/hello/" />
+    <None Include="../../examples/hello/source/*.asm" Pack="true" PackagePath="examples/hello/source/" />
+  </ItemGroup>
+</Project>

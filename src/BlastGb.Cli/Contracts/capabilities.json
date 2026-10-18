@@ -1,0 +1,567 @@
+{
+  "name": "Blast GB Tools",
+  "version": "0.4.0",
+  "schemaVersion": 1,
+  "commands": [
+    "rom info",
+    "rom verify",
+    "rom diff",
+    "rom patch",
+    "asm compile",
+    "asm decompile",
+    "project init",
+    "project import",
+    "project resolve",
+    "build",
+    "run",
+    "test",
+    "debug",
+    "capabilities",
+    "schema",
+    "version",
+    "mcp serve",
+    "init",
+    "import",
+    "inspect",
+    "verify",
+    "disassemble",
+    "patch"
+  ],
+  "commandDefinitions": [
+    {
+      "name": "rom info",
+      "description": "Inspect cartridge metadata and checksums.",
+      "arguments": [
+        {
+          "name": "rom",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": [],
+      "aliases": [
+        "inspect"
+      ]
+    },
+    {
+      "name": "rom verify",
+      "description": "Validate cartridge size, logo, and checksums.",
+      "arguments": [
+        {
+          "name": "rom",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": [],
+      "aliases": [
+        "verify"
+      ]
+    },
+    {
+      "name": "rom diff",
+      "description": "Compare two ROMs with bounded change previews.",
+      "arguments": [
+        {
+          "name": "before",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        },
+        {
+          "name": "after",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": []
+    },
+    {
+      "name": "rom patch",
+      "description": "Apply expected-byte-guarded edits to a separate cartridge.",
+      "arguments": [
+        {
+          "name": "rom",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        },
+        {
+          "name": "patches",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "output",
+        "overwrite",
+        "fix-checksums",
+        "allow-unguarded",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "write-output-rom"
+      ],
+      "aliases": [
+        "patch"
+      ]
+    },
+    {
+      "name": "asm compile",
+      "description": "Assemble RGBDS source and emit ROM, symbols, and map.",
+      "arguments": [
+        {
+          "name": "source",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "output",
+        "overwrite",
+        "fix-checksums",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "execute-rgbds",
+        "write-build-artifacts"
+      ]
+    },
+    {
+      "name": "asm decompile",
+      "description": "Decode candidate instructions or export byte-exact RGBDS data.",
+      "arguments": [
+        {
+          "name": "rom",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "output",
+        "overwrite",
+        "offset",
+        "count",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "write-output-if-requested"
+      ],
+      "aliases": [
+        "disassemble"
+      ]
+    },
+    {
+      "name": "project init",
+      "description": "Create editable source or a built-in GameSpec project.",
+      "arguments": [
+        {
+          "name": "directory",
+          "type": "path",
+          "required": true,
+          "role": "output"
+        }
+      ],
+      "options": [
+        "name",
+        "kind",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "create-project-directory"
+      ],
+      "aliases": [
+        "init"
+      ]
+    },
+    {
+      "name": "project import",
+      "description": "Preserve a cartridge and export a byte-exact source project.",
+      "arguments": [
+        {
+          "name": "rom",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        },
+        {
+          "name": "directory",
+          "type": "path",
+          "required": true,
+          "role": "output"
+        }
+      ],
+      "options": [
+        "name",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "create-project-directory"
+      ],
+      "aliases": [
+        "import"
+      ]
+    },
+    {
+      "name": "project resolve",
+      "description": "Validate a project and resolve inputs and outputs without writing.",
+      "arguments": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": false,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": [],
+      "aliases": [
+        "project info"
+      ]
+    },
+    {
+      "name": "build",
+      "description": "Build a project, RGBDS source file, or GameSpec JSON.",
+      "arguments": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": false,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "output",
+        "overwrite",
+        "fix-checksums",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "execute-rgbds-for-assembly",
+        "write-build-artifacts"
+      ]
+    },
+    {
+      "name": "run",
+      "description": "Execute a cartridge with bounded frames and optional assertions.",
+      "arguments": [
+        {
+          "name": "rom",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "frames",
+        "memory",
+        "assert",
+        "buttons",
+        "breakpoint",
+        "max-instructions",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "execute-emulator"
+      ]
+    },
+    {
+      "name": "test",
+      "description": "Execute a cartridge and require an assertion file.",
+      "arguments": [
+        {
+          "name": "rom",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "frames",
+        "memory",
+        "assert",
+        "buttons",
+        "breakpoint",
+        "max-instructions",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "execute-emulator"
+      ]
+    },
+    {
+      "name": "debug",
+      "description": "Execute a deterministic debugger command script.",
+      "arguments": [
+        {
+          "name": "rom",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "script",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "execute-emulator",
+        "write-runtime-bus-if-requested"
+      ]
+    },
+    {
+      "name": "capabilities",
+      "description": "Discover versioned commands and contracts.",
+      "arguments": [],
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": []
+    },
+    {
+      "name": "schema",
+      "description": "List contracts or retrieve a JSON Schema by name.",
+      "arguments": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": []
+    },
+    {
+      "name": "version",
+      "description": "Print the installed toolkit version.",
+      "arguments": [],
+      "options": [
+        "version",
+        "json",
+        "help"
+      ],
+      "sideEffects": [],
+      "aliases": [
+        "--version"
+      ]
+    },
+    {
+      "name": "mcp serve",
+      "description": "Serve local command utilities over MCP stdio.",
+      "arguments": [],
+      "options": [
+        "help"
+      ],
+      "sideEffects": [
+        "serve-stdio"
+      ]
+    }
+  ],
+  "optionDefinitions": {
+    "json": {
+      "type": "boolean",
+      "description": "Emit one versioned result envelope.",
+      "default": false
+    },
+    "help": {
+      "type": "boolean",
+      "description": "Show command help.",
+      "default": false
+    },
+    "version": {
+      "type": "boolean",
+      "description": "Print toolkit version."
+    },
+    "output": {
+      "type": "path",
+      "role": "output",
+      "description": "Separate destination; never an input file."
+    },
+    "overwrite": {
+      "type": "boolean",
+      "default": false,
+      "description": "Replace existing host outputs after validation."
+    },
+    "fix-checksums": {
+      "type": "boolean",
+      "default": false,
+      "description": "Explicitly repair header/global checksums."
+    },
+    "allow-unguarded": {
+      "type": "boolean",
+      "default": false,
+      "description": "Permit patch records without expected bytes."
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 256,
+      "description": "Physical ROM byte offset."
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000,
+      "default": 64,
+      "description": "Maximum candidate instructions."
+    },
+    "name": {
+      "type": "string",
+      "description": "Project display name."
+    },
+    "kind": {
+      "type": "string",
+      "choices": [
+        "source",
+        "game"
+      ],
+      "default": "source"
+    },
+    "frames": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600,
+      "default": 60,
+      "description": "70224-tick frame budgets."
+    },
+    "memory": {
+      "type": "string",
+      "description": "Mapped address:length ranges separated by commas; at most 65536 bytes total."
+    },
+    "assert": {
+      "type": "path",
+      "role": "input",
+      "schema": "assertions"
+    },
+    "script": {
+      "type": "path",
+      "role": "input",
+      "schema": "debug"
+    },
+    "buttons": {
+      "type": "string",
+      "description": "Comma-separated buttons held during execution.",
+      "choices": [
+        "up",
+        "down",
+        "left",
+        "right",
+        "A",
+        "B",
+        "start",
+        "select"
+      ]
+    },
+    "breakpoint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "Mapped CPU program-counter address."
+    },
+    "max-instructions": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000000,
+      "default": 1000000,
+      "description": "Step budget while seeking a breakpoint."
+    }
+  },
+  "requiredOptions": {
+    "rom patch": [
+      "output"
+    ],
+    "test": [
+      "assert"
+    ],
+    "debug": [
+      "script"
+    ]
+  },
+  "schemas": [
+    {
+      "name": "project",
+      "command": "gb schema project --json"
+    },
+    {
+      "name": "envelope",
+      "command": "gb schema envelope --json"
+    },
+    {
+      "name": "patches",
+      "command": "gb schema patches --json"
+    },
+    {
+      "name": "assertions",
+      "command": "gb schema assertions --json"
+    },
+    {
+      "name": "debug",
+      "command": "gb schema debug --json"
+    }
+  ],
+  "manifest": {
+    "filename": "gb-project.json",
+    "format": "blast-gb-workspace",
+    "version": 1,
+    "kinds": [
+      "source",
+      "rom",
+      "game"
+    ]
+  },
+  "externalTools": {
+    "assemblyBuild": [
+      "rgbasm",
+      "rgblink"
+    ],
+    "gameSpecBuild": [],
+    "headlessRuntime": []
+  },
+  "patchSchema": {
+    "file": "array",
+    "record": {
+      "offset": "nonnegative integer file offset",
+      "bytes": "byte array",
+      "expected": "same-length original byte array (required unless --allow-unguarded)"
+    }
+  },
+  "limitations": [
+    "Disassembly cannot recover original symbols, comments, or code/data boundaries.",
+    "Banked runtime breakpoints use mapped 16-bit addresses in any current bank.",
+    "Runtime tests are bounded emulator evidence, not hardware certification."
+  ]
+}

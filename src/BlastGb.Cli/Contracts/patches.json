@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blast-gb:schema:patches:1",
+  "title": "Guarded physical-ROM patches",
+  "type": "array",
+  "maxItems": 65536,
+  "items": {
+    "type": "object",
+    "required": [
+      "offset",
+      "bytes",
+      "expected"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "offset": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 8388607
+      },
+      "bytes": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "minItems": 1,
+        "maxItems": 65536
+      },
+      "expected": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "minItems": 1,
+        "maxItems": 65536
+      }
+    },
+    "description": "Byte arrays must have equal lengths, remain inside the ROM, and not overlap. --allow-unguarded explicitly permits omitted expected arrays."
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "format": "blast-gb-workspace",
+  "version": 1,
+  "name": "Game Boy memory demo",
+  "kind": "source",
+  "source": "source/main.asm",
+  "output": "build/hello.gb",
+  "fixChecksums": true,
+  "romSize": 32768
+}

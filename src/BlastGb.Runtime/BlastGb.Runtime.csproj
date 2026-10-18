@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Isolated Game Boy execution, debugging, and assertions over the embedded binjgb emulator.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/JsonInteger.cs" Link="Serialization/JsonInteger.cs" />
+    <PackageReference Include="Wasmtime" Version="48.0.2" />
+    <EmbeddedResource Include="../../third_party/binjgb/binjgb.wasm" LogicalName="BlastGb.Runtime.binjgb.wasm" />
+  </ItemGroup>
+</Project>

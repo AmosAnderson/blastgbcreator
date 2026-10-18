@@ -1,0 +1,4 @@
+{
+  "memory": [{ "address": 49152, "bytes": [42] }],
+  "registers": { "a": 42 }
+}

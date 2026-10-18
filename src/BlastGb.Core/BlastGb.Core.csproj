@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Reusable cartridge inspection, SM83 decoding, and original Game Boy game compilation.</Description>
+  </PropertyGroup>
+</Project>

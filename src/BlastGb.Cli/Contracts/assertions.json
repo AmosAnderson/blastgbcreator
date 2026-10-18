@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blast-gb:schema:assertions:1",
+  "title": "Mapped CPU-memory and register assertions",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "memory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "address",
+          "bytes"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "bytes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "minItems": 1,
+            "maxItems": 65536
+          }
+        }
+      }
+    },
+    "registers": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(?:[aA]|[fF])$": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "^(?:[aA][fF]|[bB][cC]|[dD][eE]|[hH][lL]|[sS][pP]|[pP][cC])$": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "memory"
+      ],
+      "properties": {
+        "memory": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "required": [
+        "registers"
+      ],
+      "properties": {
+        "registers": {
+          "minProperties": 1
+        }
+      }
+    }
+  ]
+}
