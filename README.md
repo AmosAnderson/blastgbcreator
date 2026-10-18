@@ -173,3 +173,9 @@ Tests include byte-for-byte migration fixtures, all 512 opcodes, cartridge valid
 | `examples/hello` | Original minimal assembly with executable assertions |
 
 The C# rewrite preserves version-1 project and automation contracts. See [migration notes](docs/MIGRATION.md).
+
+## License
+
+Blast GB Tools' original code, documentation, examples, and built-in game engine are licensed under the [MIT License](LICENSE).
+
+Third-party components retain their own licenses and notices; see [third-party components](THIRD_PARTY.md). The project's MIT license does not change the licensing of ROMs or other files supplied by users.
