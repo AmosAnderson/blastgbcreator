@@ -5,3 +5,12 @@
 *.gb binary
 *.gbc binary
 *.wasm binary
+
+# Graphics inputs and raw Game Boy assets must never undergo newline conversion.
+*.png binary
+*.2bpp binary
+*.1bpp binary
+*.bin binary
+*.pal binary
+*.tilemap binary
+*.attrmap binary

@@ -5,6 +5,7 @@
   "kind": "source",
   "source": "source/main.asm",
   "output": "build/hello.gb",
+  "tests": "tests.json",
   "fixChecksums": true,
   "romSize": 32768
 }

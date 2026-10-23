@@ -15,6 +15,15 @@ public static partial class CliApplication
             case "init": return InitializeProject(parsed);
             case "import": return ImportProject(parsed);
             case "resolve": return ResolveProject(parsed);
+            case "project-status": return CheckProjectFreshness(parsed);
+            case "project-test": return await TestProjectAsync(parsed, cancellationToken);
+            case "game-validate": return ValidateGame(parsed);
+            case "game-export": return ExportGameSource(parsed);
+            case "patch-create": return CreatePatch(parsed);
+            case "symbols": return InspectSymbols(parsed);
+            case "asset-convert": return await ConvertAssetAsync(parsed, cancellationToken);
+            case "asset-encode":
+            case "asset-decode": return ConvertTileBytes(parsed);
             case "build":
                 if (parsed.Invocation == "asm compile")
                 {
@@ -67,25 +76,39 @@ public static partial class CliApplication
     private static JsonObject DisassembleCartridge(ParsedCommand parsed)
     {
         parsed.RequirePositionals(1);
-        parsed.AllowOptions("output", "overwrite", "offset", "count");
+        parsed.AllowOptions("output", "overwrite", "offset", "count", "symbols", "symbol");
         var path = Path.GetFullPath(parsed.Positionals[0]);
         var rom = RomFile(path);
+        var symbolPath = parsed.Option("symbols") is { } sym ? Path.GetFullPath(sym) : null;
+        var symbols = symbolPath is null ? null : LoadSymbols(symbolPath);
         var offset = Integer(parsed.Option("offset") ?? "0x100", "offset", rom.Length - 1);
+        if (parsed.Option("symbol") is { } name)
+        {
+            if (symbols is null || parsed.Has("offset")) throw new CliException("USAGE", "--symbol requires --symbols and cannot be combined with --offset.");
+            offset = FindSymbol(symbols, name).RomOffset ?? throw new CliException("INVALID_SYMBOL", "The selected symbol does not identify a physical ROM offset.");
+            if (offset >= rom.Length) throw new CliException("INVALID_SYMBOL", "The selected symbol lies beyond this ROM.");
+        }
         var count = Integer(parsed.Option("count") ?? "64", "count", 1_000_000);
         if (count == 0) throw new CliException("USAGE", "count must be at least 1.");
         var lines = RomTools.Disassemble(rom, offset, count);
         if (parsed.Option("output") is { } destination)
         {
             var output = Path.GetFullPath(destination);
-            FileOperations.ProtectDestination(output, [path]);
-            var exact = !parsed.Has("offset") && !parsed.Has("count");
+            FileOperations.ProtectDestination(output, symbolPath is null ? [path] : [path, symbolPath]);
+            var exact = !parsed.Has("offset") && !parsed.Has("count") && !parsed.Has("symbol");
             var text = exact ? RomTools.ExportDisassembly(rom) : FormatInstructionListing(JsonSerializer.SerializeToNode(lines, JsonDefaults.Options)!.AsArray()) + "\n";
             FileOperations.AtomicWrite(output, text, parsed.Has("overwrite"));
             return exact
                 ? ToObject(new { output, format = "rgbds-byte-exact", size = rom.Length })
                 : ToObject(new { output, format = "instruction-listing", lines });
         }
-        return ToObject(new { path, offset, count = lines.Count, lines });
+        var result = ToObject(new { path, offset, count = lines.Count, lines });
+        if (symbols is not null)
+        {
+            var offsets = lines.Select(line => line.Offset).ToHashSet();
+            result["symbols"] = System.Text.Json.JsonSerializer.SerializeToNode(symbols.Where(symbol => symbol.RomOffset is { } at && offsets.Contains(at)), JsonDefaults.Options);
+        }
+        return result;
     }
 
     private static JsonObject PatchCartridge(ParsedCommand parsed)
@@ -193,18 +216,33 @@ public static partial class CliApplication
     private static JsonObject DebugCartridge(ParsedCommand parsed, CancellationToken cancellationToken)
     {
         parsed.RequirePositionals(1);
-        parsed.AllowOptions("script");
+        parsed.AllowOptions("script", "symbols", "screenshot", "capture-dir", "overwrite");
         var script = parsed.Option("script") ?? throw new CliException("USAGE", "debug requires --script FILE.json. Use gb schema debug --json for its contract.");
         var input = Path.GetFullPath(parsed.Positionals[0]);
+        var scriptPath = Path.GetFullPath(script);
+        var inputs = new List<string> { input, scriptPath };
+        var symbolFile = parsed.Option("symbols");
+        var symbols = symbolFile is not null ? LoadSymbols(Path.GetFullPath(symbolFile)) : null;
+        if (symbolFile is not null) inputs.Add(Path.GetFullPath(symbolFile));
+        var scriptJson = ResolveRuntimeSymbols(JsonFile(scriptPath), symbols);
+        var validated = RuntimeRunner.ValidateDebugScript(scriptJson, cancellationToken);
+        PreflightCaptures(parsed.Option("screenshot"), parsed.Option("capture-dir"), DebugCaptureNames(validated), inputs, parsed.Has("overwrite"));
         var rom = RomFile(input);
-        return Merge(RuntimeRunner.Debug(rom, JsonFile(Path.GetFullPath(script)), cancellationToken), new { input, sha256 = Sha256(rom) });
+        var execution = RuntimeRunner.Debug(rom, scriptJson, cancellationToken);
+        var result = Merge(execution, new { input, sha256 = Sha256(rom) });
+        var artifacts = CaptureArtifacts(execution.FramebufferRgba, execution.Captures, parsed.Option("screenshot"), parsed.Option("capture-dir"), inputs, parsed.Has("overwrite"), result);
+        cancellationToken.ThrowIfCancellationRequested();
+        FileOperations.AtomicWriteBatch(artifacts, parsed.Has("overwrite"));
+        return result;
     }
 
     private static JsonObject RunCartridge(ParsedCommand parsed, CancellationToken cancellationToken)
     {
         parsed.RequirePositionals(1);
-        parsed.AllowOptions("frames", "memory", "assert", "buttons", "breakpoint", "max-instructions");
+        parsed.AllowOptions("frames", "memory", "assert", "buttons", "breakpoint", "max-instructions", "symbols", "screenshot", "overwrite");
         var input = Path.GetFullPath(parsed.Positionals[0]);
+        var symbolPath = parsed.Option("symbols") is { } symbolFile ? Path.GetFullPath(symbolFile) : null;
+        var symbols = symbolPath is null ? null : LoadSymbols(symbolPath);
         var frames = Integer(parsed.Option("frames") ?? "60", "frames", 3600);
         if (frames == 0) throw new CliException("USAGE", "frames must be at least 1.");
         var ranges = new List<MemoryRange>();
@@ -212,7 +250,7 @@ public static partial class CliApplication
         {
             var fields = part.Split(':');
             if (fields.Length > 2) throw new CliException("USAGE", "Memory ranges use address:length, for example --memory 0xc000:16,0xff40:1.");
-            var address = Integer(fields[0], "memory address", 0xffff);
+            var address = ResolveCpuAddress(fields[0], symbols);
             var length = Integer(fields.Length == 1 || fields[1].Length == 0 ? "1" : fields[1], "memory length", 0x10000 - address);
             if (length == 0) throw new CliException("USAGE", "Memory range length must be positive.");
             ranges.Add(new MemoryRange(address, length));
@@ -224,15 +262,23 @@ public static partial class CliApplication
         var maxInstructions = Integer(parsed.Option("max-instructions") ?? "1000000", "max-instructions", 10_000_000);
         if (maxInstructions == 0) throw new CliException("USAGE", "max-instructions must be at least 1.");
         var rom = RomFile(input);
+        var inputs = new List<string> { input };
+        if (assertionPath is not null) inputs.Add(Path.GetFullPath(assertionPath));
+        if (symbolPath is not null) inputs.Add(symbolPath);
+        PreflightCaptures(parsed.Option("screenshot"), null, [], inputs, parsed.Has("overwrite"));
         var result = RuntimeRunner.Run(rom, new RunOptions
         {
             Frames = frames,
             Memory = ranges,
-            Assertions = assertionPath is null ? null : JsonFile(Path.GetFullPath(assertionPath)),
+            Assertions = assertionPath is null ? null : ResolveRuntimeSymbols(JsonFile(Path.GetFullPath(assertionPath)), symbols),
             Buttons = parsed.Option("buttons")?.Split(',') ?? [],
-            Breakpoint = parsed.Option("breakpoint") is { } breakpoint ? Integer(breakpoint, "breakpoint", 0xffff) : null,
+            Breakpoint = parsed.Option("breakpoint") is { } breakpoint ? ResolveCpuAddress(breakpoint, symbols) : null,
             MaxInstructions = maxInstructions
         }, cancellationToken);
-        return Merge(result, new { input, sha256 = Sha256(rom) });
+        var data = Merge(result, new { input, sha256 = Sha256(rom) });
+        var artifacts = CaptureArtifacts(result.FramebufferRgba, [], parsed.Option("screenshot"), null, inputs, parsed.Has("overwrite"), data);
+        cancellationToken.ThrowIfCancellationRequested();
+        FileOperations.AtomicWriteBatch(artifacts, parsed.Has("overwrite"));
+        return data;
     }
 }

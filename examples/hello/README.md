@@ -10,6 +10,7 @@ dotnet build -c Release
 dotnet src/BlastGb.Cli/bin/Release/net10.0/gb.dll build examples/hello --json
 dotnet src/BlastGb.Cli/bin/Release/net10.0/gb.dll test examples/hello/build/hello.gb --frames 10 --assert examples/hello/checks.json --json
 dotnet src/BlastGb.Cli/bin/Release/net10.0/gb.dll debug examples/hello/build/hello.gb --script examples/hello/debug.json --json
+dotnet src/BlastGb.Cli/bin/Release/net10.0/gb.dll project test examples/hello --build --overwrite --report artifacts/hello-report.json --capture-dir artifacts/hello-captures --json
 ```
 
 For repeat builds, add `--overwrite`. Set `RGBDS_BIN` to your RGBDS directory
@@ -19,3 +20,16 @@ if `rgbasm` and `rgblink` are not on PATH. After installing the utility, replace
 The debugger stops before `$0150`, executes four real CPU instructions, reads
 RAM, and asserts the result. Debug operations affect that temporary emulation
 session; the ROM file stays unchanged.
+
+The manifest selects `tests.json`, which runs three cases in fresh emulator
+sessions: bounded startup assertions, instruction stepping, and `input-sequence.json`.
+The input sequence waits for `$C000` to become `$2A`, captures `initialized`, holds
+Right and A for two frames, releases them, then checks the value and captures
+`released`. This minimal ROM does not read joypad input or draw a game scene;
+the sequence demonstrates the test controls and confirms that its memory result
+survives them. Use a game's own state checks to test movement or other mechanics.
+
+The suite command saves every case's final PNG under its name in
+`artifacts/hello-captures`, plus the two named snapshots for `input-sequence`.
+`artifacts/hello-report.json` retains hashes, CPU/memory evidence, and case results.
+A failed case exits 3 after the remaining cases have run.

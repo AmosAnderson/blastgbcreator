@@ -15,13 +15,15 @@ public static partial class CliApplication
     private const string ManifestFormat = "blast-gb-workspace";
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private static readonly JsonSerializerOptions PrettyJson = new(JsonDefaults.Options) { WriteIndented = true };
-    private static readonly HashSet<string> BooleanOptions = ["json", "overwrite", "fix-checksums", "allow-unguarded", "help", "version"];
-    private static readonly HashSet<string> OptionNames = [.. BooleanOptions, "output", "offset", "count", "name", "kind", "frames", "memory", "assert", "buttons", "breakpoint", "max-instructions", "script"];
+    private static readonly HashSet<string> BooleanOptions = ["json", "overwrite", "fix-checksums", "allow-unguarded", "help", "version", "build"];
+    private static readonly HashSet<string> OptionNames = [.. BooleanOptions, "output", "offset", "count", "name", "kind", "frames", "memory", "assert", "buttons", "breakpoint", "max-instructions", "script", "symbols", "symbol", "screenshot", "capture-dir", "receipt", "suite", "report", "tilemap", "palette", "attrmap"];
     private static readonly Dictionary<string, Dictionary<string, string>> Groups = new(StringComparer.Ordinal)
     {
-        ["rom"] = new() { ["info"] = "inspect", ["verify"] = "verify", ["patch"] = "patch", ["diff"] = "diff" },
-        ["asm"] = new() { ["compile"] = "build", ["decompile"] = "disassemble" },
-        ["project"] = new() { ["init"] = "init", ["import"] = "import", ["resolve"] = "resolve", ["info"] = "resolve" },
+        ["rom"] = new() { ["info"] = "inspect", ["verify"] = "verify", ["patch"] = "patch", ["diff"] = "diff", ["patch-create"] = "patch-create" },
+        ["asm"] = new() { ["compile"] = "build", ["decompile"] = "disassemble", ["symbols"] = "symbols" },
+        ["project"] = new() { ["init"] = "init", ["import"] = "import", ["resolve"] = "resolve", ["info"] = "resolve", ["status"] = "project-status", ["test"] = "project-test" },
+        ["game"] = new() { ["validate"] = "game-validate", ["export"] = "game-export" },
+        ["asset"] = new() { ["convert"] = "asset-convert", ["encode"] = "asset-encode", ["decode"] = "asset-decode" },
         ["mcp"] = new() { ["serve"] = "mcp" }
     };
 

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blast-gb:schema:game:1",
+  "title": "Built-in collection-game specification",
+  "description": "The fixed collection engine supports one 20 by 18 map. Runtime validation additionally requires one player, 1..99 collectibles, and reachability of every collectible. Objective text does not add mechanics. Unknown fields are ignored for compatibility.",
+  "type": "object",
+  "required": ["title", "mode", "palette", "map", "objective"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "pattern": "\\S",
+      "description": "Trimmed by the compiler; validation limits the title to 40 UTF-16 code units."
+    },
+    "mode": { "enum": ["gb", "gbc"] },
+    "palette": {
+      "type": "object",
+      "required": ["background", "ground", "wall", "player", "collectible"],
+      "properties": {
+        "background": { "$ref": "#/$defs/color" },
+        "ground": { "$ref": "#/$defs/color" },
+        "wall": { "$ref": "#/$defs/color" },
+        "player": { "$ref": "#/$defs/color" },
+        "collectible": { "$ref": "#/$defs/color" }
+      }
+    },
+    "map": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "items": { "type": "string", "minLength": 20, "maxLength": 20, "pattern": "^[#.PC]{20}$" }
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "\\S",
+      "description": "Descriptive text only, trimmed by the compiler and limited to 240 UTF-16 code units."
+    }
+  },
+  "$defs": {
+    "color": { "type": "string", "minLength": 7, "maxLength": 7, "pattern": "^#[0-9a-fA-F]{6}$" }
+  }
+}

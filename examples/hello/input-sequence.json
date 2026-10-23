@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "op": "until",
+      "frames": 1,
+      "maxInstructions": 100,
+      "memory": [{ "address": 49152, "bytes": [42] }],
+      "registers": { "a": 42 }
+    },
+    { "op": "capture", "name": "initialized" },
+    { "op": "buttons", "pressed": ["right", "A"] },
+    { "op": "frame", "count": 2 },
+    { "op": "buttons", "pressed": [] },
+    { "op": "frame", "count": 1 },
+    {
+      "op": "assert",
+      "memory": [{ "address": 49152, "bytes": [42] }],
+      "registers": { "a": 42 }
+    },
+    { "op": "capture", "name": "released" }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blast-gb:schema:suite:1",
+  "title": "Project gameplay test suite",
+  "description": "Each case executes in a fresh emulator session. All JSON inputs and aggregate budgets are validated before a requested build or execution. Aggregate limits: 3600 frames, 1000000 instruction steps, 1048576 memory bytes including repeated until predicates, 1000 script operations, and 32 explicit captures. Case names are unique ignoring case. Referenced files must stay inside the suite directory. JSON inputs may total at most 16 MiB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "cases"],
+  "properties": {
+    "version": { "const": 1 },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "script"],
+            "properties": {
+              "name": { "$ref": "#/$defs/name" },
+              "script": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Workspace-relative path from the suite directory to a version-1 debug script."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "frames", "assert"],
+            "properties": {
+              "name": { "$ref": "#/$defs/name" },
+              "frames": { "type": "integer", "minimum": 1, "maximum": 3600 },
+              "assert": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Workspace-relative path from the suite directory to memory, register, or framebuffer assertions."
+              },
+              "buttons": {
+                "type": "array",
+                "maxItems": 8,
+                "uniqueItems": true,
+                "items": { "enum": ["up", "down", "left", "right", "A", "B", "start", "select"] }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "not": { "pattern": "^(?:[cC][oO][nN]|[pP][rR][nN]|[aA][uU][xX]|[nN][uU][lL]|[cC][oO][mM][1-9]|[lL][pP][tT][1-9])$" }
+    }
+  }
+}

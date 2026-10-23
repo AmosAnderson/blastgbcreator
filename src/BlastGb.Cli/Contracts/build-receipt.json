@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blast-gb:schema:build-receipt:1",
+  "title": "Blast GB build receipt version 1",
+  "type": "object",
+  "required": ["schemaVersion", "toolkitVersion", "project", "root", "engine", "options", "tools", "inputs", "outputs"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "toolkitVersion": { "type": "string", "minLength": 1 },
+    "project": { "$ref": "#/$defs/path" },
+    "root": { "$ref": "#/$defs/path" },
+    "engine": { "enum": ["rgbds", "builtin-gamespec"] },
+    "options": {
+      "type": "object",
+      "required": ["sources", "includeDirectories", "defines", "fixChecksums", "output"],
+      "properties": {
+        "sources": { "type": "array", "items": { "$ref": "#/$defs/path" } },
+        "includeDirectories": { "type": "array", "items": { "$ref": "#/$defs/path" } },
+        "defines": { "type": "object", "additionalProperties": { "type": "string" } },
+        "fixChecksums": { "type": "boolean" },
+        "romSize": { "type": "integer", "minimum": 336, "maximum": 8388608 },
+        "output": { "$ref": "#/$defs/path" }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "path", "version", "sha256"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "path": { "$ref": "#/$defs/path" },
+          "version": { "type": "string", "minLength": 1 },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "inputs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/file" } },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Hashes of every generated artifact except this receipt itself.",
+      "items": { "$ref": "#/$defs/file" }
+    }
+  },
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "description": "Absolute host filesystem path." },
+    "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+    "file": {
+      "type": "object",
+      "required": ["path", "size", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}
