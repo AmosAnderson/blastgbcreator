@@ -1,0 +1,7 @@
+# Keep text checkouts consistent with .editorconfig on every platform.
+* text=auto eol=lf
+
+# Cartridge fixtures and the bundled emulator must remain byte-for-byte exact.
+*.gb binary
+*.gbc binary
+*.wasm binary

@@ -47,6 +47,10 @@ internal static class FileOperations
     {
         var full = Path.GetFullPath(path);
         var root = Path.GetPathRoot(full)!;
+        if (OperatingSystem.IsWindows() && IsWindowsDevicePath(full)
+            && !(root.Length == 7 && char.IsAsciiLetter(root[4]) && root[5] == ':' && root[6] == '\\')
+            && !root.AsSpan(4).StartsWith(@"UNC\", StringComparison.OrdinalIgnoreCase))
+            throw new CliException("UNSAFE_PATH", "Windows device paths must identify a drive or UNC share so filesystem aliases can be checked.");
         var current = OperatingSystem.IsWindows() ? root.ToUpperInvariant() : root;
         foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
         {
@@ -74,8 +78,19 @@ internal static class FileOperations
             }
             current = next;
         }
-        return Path.GetFullPath(current);
+        var canonical = Path.GetFullPath(current);
+        if (!OperatingSystem.IsWindows()) return canonical;
+        // Compare ordinary, extended, and device file paths in the same namespace.
+        // Add the extended prefix instead of removing it: extended paths may name
+        // distinct files with literal trailing periods or spaces.
+        if (IsWindowsDevicePath(canonical)) return @"\\?\" + canonical[4..];
+        return canonical.StartsWith(@"\\", StringComparison.Ordinal)
+            ? @"\\?\UNC\" + canonical[2..]
+            : @"\\?\" + canonical;
     }
+
+    private static bool IsWindowsDevicePath(string path) => path.StartsWith(@"\\?\", StringComparison.Ordinal)
+        || path.StartsWith(@"\\.\", StringComparison.Ordinal) || path.StartsWith(@"\??\", StringComparison.Ordinal);
 
     public static void ProtectDestination(string output, IEnumerable<string> inputs)
     {

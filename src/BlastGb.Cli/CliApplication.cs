@@ -98,12 +98,13 @@ public static partial class CliApplication
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
         var command = args.FirstOrDefault(argument => !argument.StartsWith('-')) ?? "help";
-        var wantsJson = args.Contains("--json", StringComparer.Ordinal);
+        var wantsJson = args.TakeWhile(argument => argument != "--").Contains("--json", StringComparer.Ordinal);
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             var parsed = Parse(args);
             command = parsed.Invocation;
+            wantsJson = parsed.Has("json");
             if (parsed.Command == "mcp" && !parsed.Has("help"))
             {
                 parsed.RequirePositionals(0);

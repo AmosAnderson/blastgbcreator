@@ -101,10 +101,22 @@ public static partial class CliApplication
         var source = JsonFile(patchPath);
         if (source.ValueKind != JsonValueKind.Array)
             throw new CliException("INVALID_PATCH", "The patch file must be an array of {offset, bytes, expected} records.");
+        if (source.GetArrayLength() > 65536)
+            throw new CliException("INVALID_PATCH", "The patch file may contain at most 65536 records.");
         var patches = new List<RomPatch>();
         foreach (var record in source.EnumerateArray())
         {
-            if (record.ValueKind != JsonValueKind.Object || !record.TryGetProperty("offset", out var offsetElement) || !JsonInteger.TryGetInt32(offsetElement, out var offset)
+            if (record.ValueKind != JsonValueKind.Object)
+                throw new CliException("INVALID_PATCH", "Each patch needs an integer offset and byte array.");
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in record.EnumerateObject())
+            {
+                if (property.Name is not ("offset" or "bytes" or "expected"))
+                    throw new CliException("INVALID_PATCH", $"Unknown patch property: {property.Name}.");
+                if (!names.Add(property.Name))
+                    throw new CliException("INVALID_PATCH", $"Duplicate patch property: {property.Name}.");
+            }
+            if (!record.TryGetProperty("offset", out var offsetElement) || !JsonInteger.TryGetInt32(offsetElement, out var offset)
                 || !record.TryGetProperty("bytes", out var bytesElement))
                 throw new CliException("INVALID_PATCH", "Each patch needs an integer offset and byte array.");
             var bytes = ParsePatchBytes(bytesElement, "bytes");
@@ -122,6 +134,8 @@ public static partial class CliApplication
     private static byte[] ParsePatchBytes(JsonElement element, string label)
     {
         if (element.ValueKind != JsonValueKind.Array) throw new CliException("INVALID_PATCH", $"Patch {label} must be a byte array.");
+        if (element.GetArrayLength() is < 1 or > 65536)
+            throw new CliException("INVALID_PATCH", $"Patch {label} must contain between 1 and 65536 bytes.");
         var bytes = new byte[element.GetArrayLength()];
         var index = 0;
         foreach (var value in element.EnumerateArray())

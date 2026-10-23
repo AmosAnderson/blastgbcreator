@@ -23,7 +23,7 @@ dotnet tool install BlastGb.Tools --version 0.4.0 --tool-path ./artifacts/tools 
 
 The examples below assume `gb` is on PATH. On Windows, the local executable is `artifacts/tools/gb.exe`. Direct execution of a compiled CLI is also supported: `dotnet src/BlastGb.Cli/bin/Debug/net10.0/gb.dll version`.
 
-The toolkit requires no Node.js, npm, JavaScript engine, browser, or web server. Its C# runtime hosts the bundled binjgb WebAssembly engine directly through Wasmtime. The dependency supplies native libraries for macOS, Linux, and Windows on x64 and ARM64; this checkout has been exercised on macOS ARM64. See [third-party components](THIRD_PARTY.md).
+The toolkit requires no Node.js, npm, JavaScript engine, browser, or web server. Its C# runtime hosts the bundled binjgb WebAssembly engine directly through Wasmtime. The dependency supplies native libraries for macOS, Linux, and Windows on x64 and ARM64; this checkout has been exercised on macOS ARM64 and Windows x64. See [third-party components](THIRD_PARTY.md).
 
 Install [RGBDS](https://rgbds.gbdev.io/) with `rgbasm` and `rgblink` on PATH, or set `RGBDS_BIN` to their directory, to build arbitrary assembly. Built-in GameSpec projects, ROM utilities, and emulation do not require RGBDS.
 
@@ -98,6 +98,8 @@ gb rom patch ./game.gb ./patches.json --output ./modified.gb --fix-checksums --j
 
 Every guard must match before writing. Overlapping and out-of-range patches fail. Omitted guards require `--allow-unguarded`. Source, original, manifest, and RGBDS `INCLUDE`/`INCBIN`/`READFILE` inputs are protected from output collisions, including symbolic-link aliases. Multi-file builds stage all artifacts, reject filesystem aliases, and restore earlier outputs if a commit fails. Project `patches.json` records changes; source builds do not automatically reapply it.
 
+On Windows, RGBDS dependency reports are checked as both UTF-8 and the active system code page. Ambiguous filenames or legacy encodings that cannot be decoded and re-encoded exactly fail without replacing outputs.
+
 ## Test and debug
 
 Assertion files use mapped CPU addresses and decimal JSON numbers:
@@ -161,7 +163,7 @@ dotnet format BlastGb.slnx --verify-no-changes
 
 The SDK and NuGet dependencies are pinned. NuGet restores into the ignored `.packages/` directory. `dotnet restore --locked-mode` verifies dependency locks. The package verifier packs the tool, installs it in a temporary directory, and runs real cartridge, compiler, and debugger workflows without a global installation.
 
-Tests include byte-for-byte migration fixtures, all 512 opcodes, cartridge validation, input/output preservation, native RGBDS round trips, actual emulator execution, debugger scripts, and MCP framing. Native RGBDS checks require `RGBDS_BIN`. Physical hardware and Windows/Linux execution have not been verified here.
+Tests include byte-for-byte migration fixtures, all 512 opcodes, cartridge validation, input/output preservation, native RGBDS round trips, actual emulator execution, debugger scripts, and MCP framing. Native RGBDS checks require `RGBDS_BIN`. Physical hardware and Linux execution have not been verified here.
 
 | Project | Responsibility |
 | --- | --- |
