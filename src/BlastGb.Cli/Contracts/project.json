@@ -31,6 +31,52 @@
     "source": {
       "$ref": "#/$defs/path"
     },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "description": "Assembly translation units in link order; mutually exclusive with source.",
+      "items": { "$ref": "#/$defs/path" }
+    },
+    "includeDirectories": {
+      "type": "array",
+      "maxItems": 256,
+      "description": "Existing relative workspace directories searched after the project and source directories.",
+      "items": { "$ref": "#/$defs/path" }
+    },
+    "defines": {
+      "type": "object",
+      "maxProperties": 1024,
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": { "pattern": "[\\r\\n]" } },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 4096,
+        "not": { "pattern": "[\\u0000\\r\\n]" }
+      }
+    },
+    "receipt": {
+      "$ref": "#/$defs/path"
+    },
+    "tests": {
+      "$ref": "#/$defs/path"
+    },
+    "assets": {
+      "type": "array",
+      "maxItems": 256,
+      "description": "PNG conversions staged before assembly and committed with the ROM.",
+      "items": {
+        "type": "object",
+        "required": ["input", "output"],
+        "properties": {
+          "input": { "$ref": "#/$defs/path" },
+          "output": { "$ref": "#/$defs/path" },
+          "tilemap": { "$ref": "#/$defs/path" },
+          "palette": { "$ref": "#/$defs/path" },
+          "attrmap": { "$ref": "#/$defs/path" }
+        }
+      }
+    },
     "game": {
       "$ref": "#/$defs/path"
     },
@@ -55,6 +101,9 @@
   },
   "allOf": [
     {
+      "not": { "required": ["source", "sources"] }
+    },
+    {
       "if": {
         "properties": {
           "kind": {
@@ -65,11 +114,18 @@
       "then": {
         "required": [
           "game"
-        ]
+        ],
+        "properties": {
+          "sources": false,
+          "includeDirectories": { "maxItems": 0 },
+          "defines": { "maxProperties": 0 },
+          "assets": { "maxItems": 0 }
+        }
       },
       "else": {
-        "required": [
-          "source"
+        "oneOf": [
+          { "required": ["source"] },
+          { "required": ["sources"] }
         ]
       }
     }

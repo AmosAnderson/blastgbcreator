@@ -2,45 +2,213 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:blast-gb:schema:suite:1",
   "title": "Blast GB test suite version 1",
-  "description": "Named independent emulator cases. Paths are relative to the suite directory and remain inside it. All cases and aggregate budgets are validated before building or allocating a session.",
+  "description": "Named independent emulator cases. Project suites use the project ROM and allow 1–32 cases with safe names. Standalone suites require a rom path in every case and allow 1–100 cases. All JSON inputs and aggregate budgets are validated before building or allocating a session. Paths stay inside the suite directory. See CLI documentation for mode-specific aggregate limits.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "cases"],
+  "required": [
+    "version",
+    "cases"
+  ],
   "properties": {
-    "version": { "const": 1 },
+    "version": {
+      "const": 1
+    },
     "cases": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 100,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "rom"],
-        "properties": {
-          "name": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Unique case name." },
-          "rom": { "$ref": "#/$defs/path" },
-          "assert": { "$ref": "#/$defs/path" },
-          "script": { "$ref": "#/$defs/path" },
-          "frames": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 60 },
-          "maxInstructions": { "type": "integer", "minimum": 1, "maximum": 10000000, "default": 1000000 },
-          "breakpoint": { "type": "integer", "minimum": 0, "maximum": 65535 },
-          "buttons": {
-            "type": "array",
-            "maxItems": 8,
-            "items": { "enum": ["up", "down", "left", "right", "A", "B", "start", "select"] }
+      "oneOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "script"
+                ],
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/name"
+                  },
+                  "script": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Workspace-relative path from the suite directory to a version-1 debug script."
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "frames",
+                  "assert"
+                ],
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/name"
+                  },
+                  "frames": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3600
+                  },
+                  "assert": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Workspace-relative path from the suite directory to memory, register, or framebuffer assertions."
+                  },
+                  "buttons": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "uniqueItems": true,
+                    "items": {
+                      "enum": [
+                        "up",
+                        "down",
+                        "left",
+                        "right",
+                        "A",
+                        "B",
+                        "start",
+                        "select"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
-        "oneOf": [
-          { "required": ["assert"], "not": { "required": ["script"] } },
-          {
-            "required": ["script"],
-            "not": { "anyOf": [{ "required": ["assert"] }, { "required": ["frames"] }, { "required": ["maxInstructions"] }, { "required": ["breakpoint"] }, { "required": ["buttons"] }] }
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "rom"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "Unique case name."
+              },
+              "rom": {
+                "$ref": "#/$defs/path"
+              },
+              "assert": {
+                "$ref": "#/$defs/path"
+              },
+              "script": {
+                "$ref": "#/$defs/path"
+              },
+              "frames": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600,
+                "default": 60
+              },
+              "maxInstructions": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000000,
+                "default": 1000000
+              },
+              "breakpoint": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "buttons": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                  "enum": [
+                    "up",
+                    "down",
+                    "left",
+                    "right",
+                    "A",
+                    "B",
+                    "start",
+                    "select"
+                  ]
+                }
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "assert"
+                ],
+                "not": {
+                  "required": [
+                    "script"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "script"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "assert"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "frames"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "maxInstructions"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "breakpoint"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "buttons"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
           }
-        ]
-      }
+        }
+      ]
     }
   },
   "$defs": {
-    "path": { "type": "string", "minLength": 1, "description": "Relative path inside the suite directory; traversal, absolute paths, and symlinks are rejected." }
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "not": {
+        "pattern": "^(?:[cC][oO][nN]|[pP][rR][nN]|[aA][uU][xX]|[nN][uU][lL]|[cC][oO][mM][1-9]|[lL][pP][tT][1-9])$"
+      }
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Relative path inside the suite directory; traversal, absolute paths, and symlinks are rejected."
+    }
   }
 }

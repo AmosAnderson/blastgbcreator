@@ -7,184 +7,292 @@ namespace BlastGb.Cli;
 
 public static partial class CliApplication
 {
-    private const int MaximumSuiteCases = 100;
-    private const long MaximumSuiteInstructions = 10_000_000;
-    private sealed record SuiteCase(string Name, string Rom, JsonElement? Script, RunOptions? Options);
-
-    private static async Task<JsonObject> TestSuiteAsync(ParsedCommand parsed, CancellationToken cancellationToken)
+    private static Task<JsonObject> TestSuiteAsync(ParsedCommand parsed, CancellationToken cancellationToken)
     {
         parsed.RequirePositionals(0, 1);
-        parsed.AllowOptions("build", "overwrite", "timeout-seconds");
-        if (!parsed.Has("build") && (parsed.Has("overwrite") || parsed.Has("timeout-seconds")))
-            throw new CliException("USAGE", "--overwrite and --timeout-seconds require --build for project test.");
+        var selected = Path.GetFullPath(parsed.Positionals.FirstOrDefault() ?? ".");
+        if (parsed.Has("suite")) return TestProjectAsync(parsed, cancellationToken);
+        if (!Directory.Exists(selected))
+        {
+            var document = SuiteJson(selected);
+            return document.TryGetProperty("cases", out _)
+                ? TestStandaloneSuiteAsync(parsed, cancellationToken)
+                : TestProjectAsync(parsed, cancellationToken);
+        }
+        var manifestPath = Path.Combine(selected, ManifestFile);
+        if (File.Exists(manifestPath))
+        {
+            var project = LoadManifest(manifestPath);
+            var suitePath = FileOperations.WorkspacePath(project.Root, project.Manifest.Tests ?? "tests.json", "tests");
+            if (project.Manifest.Tests is not null || File.Exists(suitePath)) return TestProjectAsync(parsed, cancellationToken);
+        }
+        return TestStandaloneSuiteAsync(parsed, cancellationToken);
+    }
+
+    private sealed record SuiteCase(string Name, JsonElement? Script, DebugScript? ValidatedScript,
+        RunOptions? Run, Assertions? Expected);
+
+    private static async Task<JsonObject> TestProjectAsync(ParsedCommand parsed, CancellationToken cancellationToken)
+    {
+        parsed.RequirePositionals(0, 1);
+        parsed.AllowOptions("suite", "build", "overwrite", "report", "capture-dir", "symbols", "timeout-seconds");
+        if (parsed.Has("timeout-seconds") && !parsed.Has("build")) throw new CliException("USAGE", "--timeout-seconds requires --build.");
         if (parsed.Option("timeout-seconds") is { } timeout && Integer(timeout, "timeout-seconds", 600) == 0)
             throw new CliException("USAGE", "timeout-seconds must be between 1 and 600.");
-        var input = Path.GetFullPath(parsed.Positionals.FirstOrDefault() ?? ".");
-        var suitePath = Directory.Exists(input) ? Path.Combine(input, "gb-tests.json") : input;
-        var root = Path.GetDirectoryName(suitePath)!;
-        FileOperations.RejectSymbolicLink(root);
-        FileOperations.RejectSymbolicLink(suitePath);
-        var suite = SuiteJson(suitePath);
-        SuiteFields(suite, ["version", "cases"], "suite");
-        _ = SuiteInteger(suite, "version", 0, 1, 1);
-        if (!suite.TryGetProperty("cases", out var caseValues) || caseValues.ValueKind != JsonValueKind.Array || caseValues.GetArrayLength() is < 1 or > MaximumSuiteCases)
-            throw new CliException("INVALID_SUITE", $"Suite cases must contain between 1 and {MaximumSuiteCases} named cases.");
-
-        string? buildRom = null;
-        if (parsed.Has("build"))
-        {
-            var project = LoadManifest(Path.Combine(root, ManifestFile));
-            buildRom = FileOperations.WorkspacePath(project.Root, project.Manifest.Output, "output");
-        }
-        var protectedInputs = new HashSet<string>(StringComparer.Ordinal) { suitePath };
-        var cachedRoms = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        var cases = new List<SuiteCase>();
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        long frames = 0, instructions = 0, memoryBytes = 0, conditionMemoryReads = 0, traceEntries = 0, commands = 0;
-        foreach (var value in caseValues.EnumerateArray())
+        var selected = Path.GetFullPath(parsed.Positionals.FirstOrDefault() ?? ".");
+        var projectPath = Directory.Exists(selected) ? Path.Combine(selected, ManifestFile) : selected;
+        var project = LoadManifest(projectPath);
+        var suitePath = parsed.Option("suite") is { } selectedSuite ? Path.GetFullPath(selectedSuite)
+            : FileOperations.WorkspacePath(project.Root, project.Manifest.Tests ?? "tests.json", "tests");
+        var suiteRoot = Path.GetDirectoryName(suitePath)!;
+        var suiteInputs = new List<string> { suitePath };
+        var symbolsPath = parsed.Option("symbols") is { } symbolsFile ? Path.GetFullPath(symbolsFile) : null;
+        var symbols = symbolsPath is null ? null : LoadSymbols(symbolsPath);
+        if (symbolsPath is not null) suiteInputs.Add(symbolsPath);
+        long jsonBytes = 0;
+        var documents = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        JsonElement ReadDocument(string path)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            SuiteFields(value, ["name", "rom", "assert", "script", "frames", "buttons", "breakpoint", "maxInstructions"], "suite case");
-            var name = SuiteString(value, "name");
-            if (name.Length > 256 || !names.Add(name)) throw new CliException("INVALID_SUITE", "Case names must be unique and at most 256 characters.");
-            var rom = FileOperations.WorkspacePath(root, SuiteString(value, "rom"), "case ROM");
-            bool rebuilt = buildRom is not null && FileOperations.CanonicalPath(rom) == FileOperations.CanonicalPath(buildRom);
-            if (!rebuilt)
+            FileOperations.RejectSymbolicLink(path);
+            if (documents.TryGetValue(path, out var cached)) return cached;
+            var length = new FileInfo(path).Length;
+            if (length > 16 * 1024 * 1024 - jsonBytes)
+                throw new CliException("INVALID_SUITE", "Suite JSON files may total at most 16 MiB.");
+            var value = JsonFile(path);
+            jsonBytes += length;
+            documents.Add(path, value);
+            return value;
+        }
+        var suite = ReadDocument(suitePath);
+        SuiteFields(suite, ["version", "cases"]);
+        _ = SuiteInteger(SuiteRequired(suite, "version"), "version", 1, 1);
+        var casesValue = SuiteRequired(suite, "cases");
+        if (casesValue.ValueKind != JsonValueKind.Array || casesValue.GetArrayLength() is < 1 or > 32)
+            throw new CliException("INVALID_SUITE", "A suite must contain between 1 and 32 cases.");
+        var cases = new List<SuiteCase>();
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        long frames = 0, instructions = 0, memory = 0, commands = 0, captures = 0, conditionMemoryReads = 0, traceEntries = 0;
+        foreach (var item in casesValue.EnumerateArray())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SuiteFields(item, ["name", "script", "frames", "assert", "buttons"]);
+            var name = SuiteString(SuiteRequired(item, "name"), "case name");
+            if (!SuiteCaseName(name) || !names.Add(name))
+                throw new CliException("INVALID_SUITE", "Case names must be unique safe 1–64 character labels, ignoring case; Windows device names are reserved.");
+            try
             {
-                protectedInputs.Add(rom);
-                if (!cachedRoms.ContainsKey(rom)) cachedRoms.Add(rom, RomFile(rom));
-            }
-            bool hasAssert = value.TryGetProperty("assert", out _), hasScript = value.TryGetProperty("script", out _);
-            if (hasAssert == hasScript) throw new CliException("INVALID_SUITE", $"Case {name} requires exactly one of assert or script.");
-            if (hasScript)
-            {
-                SuiteFields(value, ["name", "rom", "script"], "script case");
-                var scriptPath = FileOperations.WorkspacePath(root, SuiteString(value, "script"), "debug script");
-                protectedInputs.Add(scriptPath);
-                var scriptValue = SuiteJson(scriptPath);
-                var script = RuntimeRunner.ValidateDebugScript(scriptValue, cancellationToken);
-                commands += script.Commands.Count;
-                foreach (var command in script.Commands)
+                if (item.TryGetProperty("script", out var scriptPathValue))
                 {
-                    switch (command)
+                    if (item.TryGetProperty("frames", out _) || item.TryGetProperty("assert", out _) || item.TryGetProperty("buttons", out _))
+                        throw new CliException("INVALID_SUITE", "A script case cannot also specify frames, assert, or buttons.");
+                    var scriptPath = FileOperations.WorkspacePath(suiteRoot, SuiteString(scriptPathValue, "script"), "script");
+                    suiteInputs.Add(scriptPath);
+                    var script = ResolveRuntimeSymbols(ReadDocument(scriptPath), symbols);
+                    var validated = RuntimeRunner.ValidateDebugScript(script, cancellationToken);
+                    commands += validated.Commands.Count;
+                    foreach (var command in validated.Commands)
                     {
-                        case AdvanceCommand advance when advance.Op == "frame": frames += advance.Count; break;
-                        case AdvanceCommand advance: instructions += advance.Count; break;
-                        case ReadCommand read: memoryBytes += read.Length; break;
-                        case WriteCommand write: memoryBytes += write.Bytes.Length; break;
-                        case AssertCommand assertion: memoryBytes += assertion.Expected.Memory.Sum(item => (long)item.Bytes.Length); break;
-                        case RunCommand run:
-                            frames += run.Frames;
-                            instructions += run.MaxInstructions;
-                            traceEntries += run.TraceCapacity;
-                            if (run.Until is not null)
-                            {
-                                long bytes = run.Until.Memory.Sum(item => (long)item.Bytes.Length);
-                                memoryBytes += bytes;
-                                conditionMemoryReads += bytes * (run.MaxInstructions + 1L);
-                            }
-                            break;
+                        switch (command)
+                        {
+                            case AdvanceCommand advance when advance.Op == "frame": frames += advance.Count; break;
+                            case AdvanceCommand advance: instructions += advance.Count; break;
+                            case RunCommand run:
+                                frames += run.Frames;
+                                instructions += run.MaxInstructions;
+                                traceEntries += run.TraceCapacity;
+                                if (run.Until is not null)
+                                {
+                                    long bytes = run.Until.Memory.Sum(check => (long)check.Bytes.Length);
+                                    memory += bytes;
+                                    conditionMemoryReads += bytes * (run.MaxInstructions + 1L);
+                                }
+                                break;
+                            case UntilCommand until:
+                                frames += until.Frames;
+                                instructions += until.MaxInstructions;
+                                long reads = until.Expected.Memory.Sum(check => (long)check.Bytes.Length) * (until.MaxInstructions + 2L);
+                                memory += reads;
+                                conditionMemoryReads += reads;
+                                break;
+                            case ReadCommand read: memory += read.Length; break;
+                            case WriteCommand write: memory += write.Bytes.Length; break;
+                            case AssertCommand assert: memory += assert.Expected.Memory.Sum(check => (long)check.Bytes.Length); break;
+                            case CaptureCommand: captures++; break;
+                        }
                     }
+                    cases.Add(new(name, script, validated, null, null));
                 }
-                cases.Add(new(name, rom, scriptValue, null));
-            }
-            else
-            {
-                var assertionPath = FileOperations.WorkspacePath(root, SuiteString(value, "assert"), "assertions");
-                protectedInputs.Add(assertionPath);
-                var assertionValue = SuiteJson(assertionPath);
-                var expected = RuntimeRunner.NormalizeAssertions(assertionValue, cancellationToken);
-                int caseFrames = SuiteInteger(value, "frames", 60, 1, 3600);
-                int maximumInstructions = SuiteInteger(value, "maxInstructions", 1_000_000, 1, 10_000_000);
-                int? breakpoint = value.TryGetProperty("breakpoint", out _) ? SuiteInteger(value, "breakpoint", 0, 0, 65535) : null;
-                var buttons = new List<string>();
-                if (value.TryGetProperty("buttons", out var pressed))
+                else
                 {
-                    if (pressed.ValueKind != JsonValueKind.Array || pressed.GetArrayLength() > 8) throw new CliException("INVALID_SUITE", "Case buttons must be an array of at most eight button names.");
-                    foreach (var button in pressed.EnumerateArray())
+                    var caseFrames = SuiteInteger(SuiteRequired(item, "frames"), "frames", 1, DebugLimits.Frames);
+                    var assertionPath = FileOperations.WorkspacePath(suiteRoot, SuiteString(SuiteRequired(item, "assert"), "assert"), "assert");
+                    suiteInputs.Add(assertionPath);
+                    var assertion = ResolveRuntimeSymbols(ReadDocument(assertionPath), symbols);
+                    var expected = RuntimeRunner.NormalizeAssertions(assertion, cancellationToken);
+                    var buttons = Array.Empty<string>();
+                    if (item.TryGetProperty("buttons", out var pressed))
                     {
-                        if (button.ValueKind != JsonValueKind.String || button.GetString() is not ("up" or "down" or "left" or "right" or "A" or "B" or "start" or "select"))
-                            throw new CliException("INVALID_SUITE", "Unknown case button; use up, down, left, right, A, B, start, or select.");
-                        if (!buttons.Contains(button.GetString()!, StringComparer.Ordinal)) buttons.Add(button.GetString()!);
+                        var buttonScript = JsonSerializer.SerializeToElement(new { version = 1, commands = new[] { new { op = "buttons", pressed } } });
+                        buttons = ((ButtonsCommand)RuntimeRunner.ValidateDebugScript(buttonScript, cancellationToken).Commands[0]).Pressed;
                     }
+                    frames += caseFrames;
+                    memory += expected.Memory.Sum(check => (long)check.Bytes.Length);
+                    cases.Add(new(name, null, null, new RunOptions { Frames = caseFrames, Assertions = assertion, Buttons = buttons }, expected));
                 }
-                frames += caseFrames;
-                if (breakpoint is not null) instructions += maximumInstructions;
-                memoryBytes += expected.Memory.Sum(item => (long)item.Bytes.Length);
-                cases.Add(new(name, rom, null, new RunOptions { Frames = caseFrames, MaxInstructions = maximumInstructions, Breakpoint = breakpoint, Buttons = buttons, Assertions = assertionValue }));
+            }
+            catch (ArgumentException exception)
+            {
+                throw new CliException("INVALID_SUITE", $"Case {name}: {exception.Message}", exception);
             }
         }
-        if (frames > 3600 || instructions > MaximumSuiteInstructions || memoryBytes > DebugLimits.MemoryBytes || commands > DebugLimits.Commands ||
+        if (frames > DebugLimits.Frames || instructions > DebugLimits.Instructions || memory > DebugLimits.MemoryBytes || commands > DebugLimits.Commands || captures > DebugLimits.Captures ||
             conditionMemoryReads > RuntimeRunner.MaximumConditionMemoryReads || traceEntries > 4096)
-            throw new CliException("INVALID_SUITE", "Suite aggregate budgets exceed 3600 frames, 10000000 instruction steps, 1048576 memory bytes, 1000 script commands, 16777216 condition memory reads, or 4096 trace entries.");
+            throw new CliException("INVALID_SUITE", "Suite aggregate budgets exceed 3600 frames, 1000000 instructions, 1048576 memory bytes, 1000 script commands, 32 explicit captures, 16777216 condition memory reads, or 4096 trace entries.");
 
-        cancellationToken.ThrowIfCancellationRequested();
+        var input = FileOperations.WorkspacePath(project.Root, project.Manifest.Output, "output");
+        var protectedInputs = new List<string> { project.Path, input };
+        protectedInputs.AddRange(project.Manifest.InputPaths().Select(path => FileOperations.WorkspacePath(project.Root, path.Value, path.Role)));
+        foreach (var asset in project.Manifest.Assets ?? [])
+            protectedInputs.AddRange(asset.Outputs().Select(output => FileOperations.WorkspacePath(project.Root, output.Path, "asset " + output.Role)));
+        protectedInputs.AddRange(suiteInputs);
+        if (project.Manifest.Kind != "game") protectedInputs.AddRange([Path.ChangeExtension(input, ".sym"), Path.ChangeExtension(input, ".map")]);
+        if (project.Manifest.Receipt is { } receipt) protectedInputs.Add(FileOperations.WorkspacePath(project.Root, receipt, "receipt"));
+        var overwrite = parsed.Has("overwrite");
+        var reportPath = parsed.Option("report") is { } report ? Path.GetFullPath(report) : null;
+        var captureRoot = parsed.Option("capture-dir") is { } captureDirectory ? Path.GetFullPath(captureDirectory) : null;
+        var existingOutputsConfirmed = false;
+        string? CaptureDirectory(SuiteCase item) => captureRoot is null ? null : FileOperations.WorkspacePath(captureRoot, item.Name, "case capture directory");
+        void PreflightOutputs()
+        {
+            var planned = new List<string>();
+            if (reportPath is not null)
+            {
+                FileOperations.ProtectDestination(reportPath, protectedInputs);
+                FileOperations.AssertWritable(reportPath, overwrite);
+                planned.Add(reportPath);
+            }
+            foreach (var item in cases)
+            {
+                var directory = CaptureDirectory(item);
+                if (directory is null) continue;
+                var screenshot = Path.Combine(directory, "_final.png");
+                var captureNames = item.ValidatedScript is { } script ? DebugCaptureNames(script).ToArray()
+                    : item.Expected?.FramebufferSha256 is not null ? new[] { "failure" } : [];
+                PreflightCaptures(screenshot, directory, captureNames, protectedInputs, overwrite);
+                planned.Add(screenshot);
+                planned.AddRange(captureNames.Select(name => Path.Combine(directory, name + ".png")));
+            }
+            if (planned.Select(FileOperations.CanonicalPath).Distinct(StringComparer.Ordinal).Count() != planned.Count)
+                throw new CliException("UNSAFE_OUTPUT", "Suite report and capture destinations must be distinct.");
+            if (!parsed.Has("build") && project.Manifest.Kind != "game" && !existingOutputsConfirmed && planned.Any(File.Exists))
+            {
+                var receiptPath = project.Manifest.Receipt is { } relative ? FileOperations.WorkspacePath(project.Root, relative, "receipt") : null;
+                if (receiptPath is null || !File.Exists(receiptPath))
+                    throw new CliException("UNSAFE_OUTPUT", "Replacing suite reports or captures for an assembly workspace requires --build or a fresh manifest receipt to protect assembler inputs.");
+                var previous = BuildReceipt.Read(receiptPath);
+                if (previous.Check(project.Path).Count != 0)
+                    throw new CliException("UNSAFE_OUTPUT", "The manifest build receipt is stale. Use --build before replacing suite reports or captures so assembler inputs can be protected.");
+                protectedInputs.AddRange(previous.Inputs.Concat(previous.Outputs).Select(file => file.Path));
+                existingOutputsConfirmed = true;
+            }
+            foreach (var path in planned) FileOperations.ProtectDestination(path, protectedInputs);
+        }
+        PreflightOutputs();
         JsonObject? build = null;
         if (parsed.Has("build"))
         {
             var options = new Dictionary<string, string?>(StringComparer.Ordinal);
-            if (parsed.Has("overwrite")) options.Add("overwrite", null);
+            if (overwrite) options.Add("overwrite", null);
             if (parsed.Option("timeout-seconds") is { } seconds) options.Add("timeout-seconds", seconds);
-            build = await BuildAsync(new ParsedCommand("build", "build", [root], options), cancellationToken, protectedInputs.ToArray());
-            cachedRoms[buildRom!] = RomFile(buildRom!);
+            build = await BuildAsync(new ParsedCommand("build", "build", [project.Path], options), cancellationToken, suiteInputs,
+                discovered => { protectedInputs.AddRange(discovered); PreflightOutputs(); });
         }
-        var results = new JsonArray();
-        int passed = 0;
-        foreach (var testCase in cases)
+        var rom = RomFile(input);
+        var artifacts = new List<FileOperations.Artifact>();
+        var evidence = new JsonArray();
+        var passed = 0;
+        foreach (var item in cases)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var entry = new JsonObject { ["name"] = item.Name, ["kind"] = item.Script is null ? "run" : "script" };
+            JsonObject? data = null;
+            byte[] pixels = [];
+            IReadOnlyList<FrameCapture> caseCaptures = [];
+            bool valid;
             try
             {
-                var rom = cachedRoms.TryGetValue(testCase.Rom, out var cached) ? cached : cachedRoms[buildRom!];
-                var evidence = testCase.Script is { } script
-                    ? ToObject(RuntimeRunner.Debug(rom, script, cancellationToken))
-                    : ToObject(RuntimeRunner.Run(rom, testCase.Options!, cancellationToken));
-                bool ok = !IsFalse(evidence["assertionsPassed"]) && !IsFalse(evidence["breakpointReached"]) && !IsFalse(evidence["conditionsPassed"]);
-                if (ok) passed++;
-                results.Add(new JsonObject { ["name"] = testCase.Name, ["rom"] = testCase.Rom, ["sha256"] = Sha256(rom), ["ok"] = ok, ["data"] = evidence });
+                if (item.Script is { } script)
+                {
+                    var result = RuntimeRunner.Debug(rom, script, cancellationToken);
+                    data = ToObject(result);
+                    pixels = result.FramebufferRgba;
+                    caseCaptures = result.Captures;
+                    valid = result.AssertionsPassed && result.Completed;
+                }
+                else
+                {
+                    var result = RuntimeRunner.Run(rom, item.Run!, cancellationToken);
+                    data = ToObject(result);
+                    pixels = result.FramebufferRgba;
+                    valid = result.AssertionsPassed;
+                    if (result.Assertions.Any(check => check.Kind == "framebuffer" && !check.Passed))
+                        caseCaptures = [new FrameCapture("failure", pixels, result.FramebufferSha256)];
+                }
             }
             catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException and not StackOverflowException)
             {
-                results.Add(new JsonObject { ["name"] = testCase.Name, ["rom"] = testCase.Rom, ["ok"] = false, ["error"] = ToObject(new { code = exception is CliException cli ? cli.Code : "OPERATION_FAILED", message = exception.Message }) });
+                valid = false;
+                entry["error"] = ToObject(new { code = exception is CliException cli ? cli.Code : "OPERATION_FAILED", message = exception.Message });
             }
+            if (data is not null)
+            {
+                var directory = CaptureDirectory(item);
+                artifacts.AddRange(CaptureArtifacts(pixels, caseCaptures, directory is null ? null : Path.Combine(directory, "_final.png"),
+                    directory, protectedInputs, overwrite, data));
+                entry["data"] = data;
+            }
+            entry["valid"] = valid;
+            if (valid) passed++;
+            evidence.Add(entry);
         }
-        var result = ToObject(new { suite = suitePath, total = cases.Count, passed, failed = cases.Count - passed, assertionsPassed = passed == cases.Count, budgets = new { frames, instructions, memoryBytes, commands, conditionMemoryReads, traceEntries } });
-        result["results"] = results;
-        if (build is not null) result["build"] = build;
-        return result;
-    }
-
-    private static JsonElement SuiteJson(string path)
-    {
-        if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new CliException("INVALID_SUITE", "Suite input files may not exceed 16 MiB.");
-        return JsonFile(path);
-    }
-
-    private static void SuiteFields(JsonElement value, string[] allowed, string label)
-    {
-        if (value.ValueKind != JsonValueKind.Object) throw new CliException("INVALID_SUITE", $"{label} must be an object.");
-        var fields = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var property in value.EnumerateObject())
-            if (!allowed.Contains(property.Name, StringComparer.Ordinal) || !fields.Add(property.Name))
-                throw new CliException("INVALID_SUITE", $"Unknown or duplicate {label} field {property.Name}.");
-    }
-
-    private static string SuiteString(JsonElement value, string name)
-    {
-        if (!value.TryGetProperty(name, out var field) || field.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(field.GetString()))
-            throw new CliException("INVALID_SUITE", $"{name} must be a nonempty string.");
-        return field.GetString()!;
-    }
-
-    private static int SuiteInteger(JsonElement value, string name, int fallback, int minimum, int maximum)
-    {
-        if (!value.TryGetProperty(name, out var field))
+        var summary = ToObject(new { project = project.Path, suite = suitePath, input, sha256 = Sha256(rom), valid = passed == cases.Count, total = cases.Count, passed, failed = cases.Count - passed });
+        summary["cases"] = evidence;
+        if (build is not null) summary["build"] = build;
+        if (reportPath is not null)
         {
-            if (fallback >= minimum && fallback <= maximum) return fallback;
-            throw new CliException("INVALID_SUITE", $"Missing {name}.");
+            summary["report"] = reportPath;
+            artifacts.Add(new(reportPath, JsonText(summary)));
         }
-        if (!JsonInteger.TryGetInt32(field, out int number) || number < minimum || number > maximum)
-            throw new CliException("INVALID_SUITE", $"{name} must be an integer between {minimum} and {maximum}.");
-        return number;
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (var artifact in artifacts) FileOperations.ProtectDestination(artifact.Path, protectedInputs);
+        FileOperations.AtomicWriteBatch(artifacts, overwrite);
+        return summary;
+    }
+
+    private static void SuiteFields(JsonElement value, string[] allowed)
+    {
+        if (value.ValueKind != JsonValueKind.Object) throw new CliException("INVALID_SUITE", "Suite and case definitions must be objects.");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+            if (!allowed.Contains(property.Name, StringComparer.Ordinal) || !seen.Add(property.Name))
+                throw new CliException("INVALID_SUITE", $"Unknown or duplicate suite field {property.Name}.");
+    }
+
+    private static JsonElement SuiteRequired(JsonElement value, string name) => value.TryGetProperty(name, out var property)
+        ? property : throw new CliException("INVALID_SUITE", $"Missing suite field {name}.");
+
+    private static string SuiteString(JsonElement value, string label) => value.ValueKind == JsonValueKind.String && value.GetString() is { Length: > 0 } text
+        ? text : throw new CliException("INVALID_SUITE", $"Suite {label} must be a nonempty string.");
+
+    private static int SuiteInteger(JsonElement value, string label, int minimum, int maximum) => JsonInteger.TryGetInt32(value, out var number) && number >= minimum && number <= maximum
+        ? number : throw new CliException("INVALID_SUITE", $"Suite {label} must be an integer between {minimum} and {maximum}.");
+
+    private static bool SuiteCaseName(string name)
+    {
+        if (name.Length > 64 || !char.IsAsciiLetterOrDigit(name[0]) || !name.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-')) return false;
+        var upper = name.ToUpperInvariant();
+        return upper is not ("CON" or "PRN" or "AUX" or "NUL") && !(upper.Length == 4 &&
+            (upper.StartsWith("COM", StringComparison.Ordinal) || upper.StartsWith("LPT", StringComparison.Ordinal)) && upper[3] is >= '1' and <= '9');
     }
 }

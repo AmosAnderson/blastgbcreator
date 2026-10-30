@@ -22,7 +22,7 @@ public static partial class CliApplication
     private static void ValidateRuntimeOutputs(ParsedCommand parsed, string[] inputs)
     {
         string[] outputs = new[] { "screenshot", "save-output" }.Select(parsed.Option).Where(path => path is not null).Select(path => Path.GetFullPath(path!)).ToArray();
-        if (parsed.Has("overwrite") && outputs.Length == 0) throw new CliException("USAGE", "--overwrite requires --screenshot or --save-output.");
+        if (parsed.Has("overwrite") && outputs.Length == 0 && !parsed.Has("capture-dir")) throw new CliException("USAGE", "--overwrite requires --screenshot, --capture-dir, or --save-output.");
         foreach (string output in outputs)
         {
             FileOperations.ProtectDestination(output, inputs);
@@ -32,15 +32,11 @@ public static partial class CliApplication
             throw new CliException("UNSAFE_OUTPUT", "Runtime outputs must use distinct destinations.");
     }
 
-    private static void WriteRuntimeOutputs(ParsedCommand parsed, byte[]? framebuffer, byte[]? save, JsonObject data, CancellationToken cancellationToken)
+    private static void WriteRuntimeOutputs(ParsedCommand parsed, byte[] framebuffer, byte[]? save, JsonObject data, CancellationToken cancellationToken,
+        IReadOnlyList<FrameCapture>? captures = null)
     {
-        var artifacts = new List<FileOperations.Artifact>();
-        if (parsed.Option("screenshot") is { } screenshot)
-        {
-            string output = Path.GetFullPath(screenshot);
-            artifacts.Add(new(output, new PngImage(160, 144, framebuffer ?? throw new InvalidOperationException("Missing framebuffer capture.")).Encode()));
-            data["screenshot"] = output;
-        }
+        var artifacts = CaptureArtifacts(framebuffer, captures ?? [], parsed.Option("screenshot"), parsed.Option("capture-dir"),
+            RuntimeInputPaths(parsed, Path.GetFullPath(parsed.Positionals[0])), parsed.Has("overwrite"), data);
         if (parsed.Option("save-output") is { } savePath)
         {
             string output = Path.GetFullPath(savePath);
@@ -51,16 +47,6 @@ public static partial class CliApplication
         cancellationToken.ThrowIfCancellationRequested();
         if (artifacts.Count != 0) FileOperations.AtomicWriteBatch(artifacts, parsed.Has("overwrite"));
     }
-
-    private static RgbdsSymbolTable? ReadSymbols(ParsedCommand parsed) => parsed.Option("symbols") is { } path
-        ? RgbdsSymbols.Parse(File.ReadAllText(Path.GetFullPath(path), Utf8)) : null;
-
-    private static RgbdsSymbol ResolveSymbol(RgbdsSymbolTable? table, string name) => table is null
-        ? throw new CliException("USAGE", "Named addresses require --symbols FILE.sym.")
-        : table.GetByName(name);
-
-    private static int BreakpointAddress(string value, RgbdsSymbolTable? table) => IntegerPattern().IsMatch(value)
-        ? Integer(value, "breakpoint", 65535) : ResolveSymbol(table, value).Address;
 
     private static JsonObject LintGame(ParsedCommand parsed)
     {

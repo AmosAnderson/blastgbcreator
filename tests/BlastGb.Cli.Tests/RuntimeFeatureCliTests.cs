@@ -191,6 +191,21 @@ public sealed class RuntimeFeatureCliTests : IDisposable
     }
 
     [Fact]
+    public async Task NamedCaptureCannotCollideWithBatterySaveOutput()
+    {
+        var (path, rom) = Cartridge(true);
+        string script = PathFor("capture.json"), save = PathFor("ready.png");
+        const string commands = """{"version":1,"commands":[{"op":"capture","name":"ready"}]}""";
+        File.WriteAllText(script, commands);
+        File.WriteAllBytes(save, [9, 8, 7]);
+        var result = await Invoke("debug", path, "--script", script, "--capture-dir", directory, "--save-output", save, "--overwrite");
+        Assert.Equal("UNSAFE_OUTPUT", Error(result));
+        Assert.Equal(new byte[] { 9, 8, 7 }, File.ReadAllBytes(save));
+        Assert.Equal(commands, File.ReadAllText(script));
+        Assert.Equal(rom, File.ReadAllBytes(path));
+    }
+
+    [Fact]
     public async Task UnsupportedCartridgeDoesNotWriteEitherRuntimeArtifact()
     {
         var (path, rom) = Cartridge();

@@ -80,6 +80,28 @@ public sealed class CliTests : IDisposable
         Assert.Equal(2, await CliApplication.RunAsync(args, output, error));
     }
 
+    [Theory]
+    [InlineData("version", "--", "--json")]
+    [InlineData("version", "--unrecognized", "--", "--json")]
+    public async Task JsonPositionalAfterTerminatorDoesNotChangeErrorOutput(params string[] args)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(2, await CliApplication.RunAsync(args, output, error));
+        Assert.Equal("", output.ToString());
+        Assert.StartsWith("USAGE:", error.ToString());
+    }
+
+    [Fact]
+    public async Task JsonOptionBeforeTerminatorStillControlsOutput()
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(2, await CliApplication.RunAsync(["version", "--json", "--", "--json"], output, error));
+        Assert.Equal("", error.ToString());
+        Assert.Equal("USAGE", JsonNode.Parse(output.ToString())!["error"]!["code"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task ResolvesProjectWithoutCreatingOutputAndProtectsCollisions()
     {

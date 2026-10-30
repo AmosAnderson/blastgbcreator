@@ -8,7 +8,7 @@
     "commands"
   ],
   "additionalProperties": false,
-  "description": "Aggregate budgets: at most 3600 frames, 1000000 step/run instructions, 1048576 read/write/assert/condition bytes, 16777216 condition-memory reads across instruction budgets, and 4096 retained trace entries. Address ranges must fit mapped memory. Duplicate breakpoint addresses are normalized. Buttons replaces the held set. Unreached run conditions stop later commands.",
+  "description": "Aggregate budgets: at most 1000 commands, 3600 frames, 1000000 step/run/until instructions, 1048576 read/write/assert/until-predicate bytes, 16777216 combined run/until-condition memory reads across instruction budgets, 4096 retained trace entries, and 32 explicit captures. Until predicates reserve worst-case repeated memory reads. Address ranges must fit mapped memory. Duplicate breakpoint addresses are normalized. Buttons replaces the held set. Failed assertions and unmet conditions stop later commands.",
   "properties": {
     "version": {
       "const": 1
@@ -65,9 +65,19 @@
                 "const": "read"
               },
               "address": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 65535
+                "oneOf": [
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "type": "string"
+                  }
+                ],
+                "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
               },
               "length": {
                 "type": "integer",
@@ -89,9 +99,19 @@
                 "const": "write"
               },
               "address": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 65535
+                "oneOf": [
+                  {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "type": "string"
+                  }
+                ],
+                "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
               },
               "bytes": {
                 "type": "array",
@@ -122,16 +142,17 @@
                 "items": {
                   "oneOf": [
                     {
-                      "type": "integer",
+                      "maximum": 65535,
                       "minimum": 0,
-                      "maximum": 65535
+                      "type": "integer"
                     },
                     {
-                      "type": "string",
-                      "minLength": 1
+                      "minLength": 1,
+                      "maxLength": 1024,
+                      "type": "string"
                     }
                   ],
-                  "description": "Symbol names require CLI --symbols and resolve to mapped CPU addresses, matching whichever ROM bank is active; no bank filter is applied."
+                  "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
                 }
               }
             }
@@ -171,9 +192,19 @@
                       "additionalProperties": false,
                       "properties": {
                         "address": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 65535
+                          "oneOf": [
+                            {
+                              "maximum": 65535,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "minLength": 1,
+                              "maxLength": 1024,
+                              "type": "string"
+                            }
+                          ],
+                          "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
                         },
                         "bytes": {
                           "type": "array",
@@ -197,10 +228,25 @@
                         "minimum": 0,
                         "maximum": 255
                       },
-                      "^(?:[aA][fF]|[bB][cC]|[dD][eE]|[hH][lL]|[sS][pP]|[pP][cC])$": {
+                      "^(?:[aA][fF]|[bB][cC]|[dD][eE]|[hH][lL]|[sS][pP])$": {
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 65535
+                      },
+                      "^[pP][cC]$": {
+                        "oneOf": [
+                          {
+                            "maximum": 65535,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "minLength": 1,
+                            "maxLength": 1024,
+                            "type": "string"
+                          }
+                        ],
+                        "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
                       }
                     }
                   }
@@ -256,9 +302,19 @@
                   "additionalProperties": false,
                   "properties": {
                     "address": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 65535
+                      "oneOf": [
+                        {
+                          "maximum": 65535,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "type": "string"
+                        }
+                      ],
+                      "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
                     },
                     "bytes": {
                       "type": "array",
@@ -282,16 +338,32 @@
                     "minimum": 0,
                     "maximum": 255
                   },
-                  "^(?:[aA][fF]|[bB][cC]|[dD][eE]|[hH][lL]|[sS][pP]|[pP][cC])$": {
+                  "^(?:[aA][fF]|[bB][cC]|[dD][eE]|[hH][lL]|[sS][pP])$": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 65535
+                  },
+                  "^[pP][cC]$": {
+                    "oneOf": [
+                      {
+                        "maximum": 65535,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "minLength": 1,
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    ],
+                    "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
                   }
                 }
               },
               "framebufferSha256": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{64}$"
+                "pattern": "^[0-9a-fA-F]{64}$",
+                "description": "SHA-256 of the 160 by 144 RGBA framebuffer, normalized to lowercase."
               }
             },
             "anyOf": [
@@ -338,6 +410,7 @@
                 "maxItems": 8,
                 "uniqueItems": true,
                 "items": {
+                  "type": "string",
                   "enum": [
                     "up",
                     "down",
@@ -350,7 +423,154 @@
                   ]
                 }
               }
-            }
+            },
+            "description": "Replace the complete set of held buttons; an empty array releases all buttons."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "const": "until"
+              },
+              "memory": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "address",
+                    "bytes"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "address": {
+                      "oneOf": [
+                        {
+                          "maximum": 65535,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "minLength": 1,
+                          "maxLength": 1024,
+                          "type": "string"
+                        }
+                      ],
+                      "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
+                    },
+                    "bytes": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 255
+                      },
+                      "minItems": 1,
+                      "maxItems": 65536
+                    }
+                  }
+                }
+              },
+              "registers": {
+                "type": "object",
+                "additionalProperties": false,
+                "patternProperties": {
+                  "^(?:[aA]|[fF])$": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  },
+                  "^(?:[aA][fF]|[bB][cC]|[dD][eE]|[hH][lL]|[sS][pP])$": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "^[pP][cC]$": {
+                    "oneOf": [
+                      {
+                        "maximum": 65535,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "minLength": 1,
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    ],
+                    "description": "Mapped CPU address or label resolved by CLI --symbols. Symbol labels must be bank-0 ROM0, WRAM0 or HRAM; constants and banked regions are rejected."
+                  }
+                }
+              },
+              "frames": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600,
+                "default": 60
+              },
+              "maxInstructions": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000,
+                "default": 100000
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "memory"
+                ],
+                "properties": {
+                  "memory": {
+                    "minItems": 1
+                  }
+                }
+              },
+              {
+                "required": [
+                  "registers"
+                ],
+                "properties": {
+                  "registers": {
+                    "minProperties": 1
+                  }
+                }
+              }
+            ],
+            "description": "Wait for all memory/register conditions, checking initially and after each advancing instruction. An unmet condition stops the script with assertionsPassed false. Predicate memory reserves (maxInstructions + 2) times the listed bytes, including final evidence."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "name"
+            ],
+            "properties": {
+              "op": {
+                "const": "capture"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^(?:[cC][oO][nN]|[pP][rR][nN]|[aA][uU][xX]|[nN][uU][lL]|[cC][oO][mM][1-9]|[lL][pP][tT][1-9])$"
+                    },
+                    {
+                      "pattern": "^[fF][aA][iI][lL][uU][rR][eE]-[0-9]+$"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Capture named framebuffer hash evidence and pixels. Names are unique ignoring case. At most 32 captures per script; failure-N names are reserved."
           }
         ]
       }

@@ -88,6 +88,32 @@ public sealed class SuiteTests : IDisposable
     }
 
     [Fact]
+    public async Task ExplicitUntilBudgetsAreAggregatedAcrossStandaloneCases()
+    {
+        var project = PathFor("project");
+        Assert.Equal(0, (await CliTests.Invoke("project", "init", project, "--kind", "game")).Status);
+        File.WriteAllText(Path.Combine(project, "long.json"), """{"version":1,"commands":[{"op":"until","frames":1801,"maxInstructions":1,"registers":{"pc":256}}]}""");
+        File.WriteAllText(Path.Combine(project, "gb-tests.json"), """{"version":1,"cases":[{"name":"first","rom":"build/game.gb","script":"long.json"},{"name":"second","rom":"build/game.gb","script":"long.json"}]}""");
+        var result = await CliTests.Invoke("project", "test", project, "--build");
+        Assert.Equal("INVALID_SUITE", result.Json["error"]!["code"]!.GetValue<string>());
+        Assert.False(Directory.Exists(Path.Combine(project, "build")));
+    }
+
+    [Fact]
+    public async Task NamedCaptureBudgetsAreAggregatedAcrossStandaloneCases()
+    {
+        var project = PathFor("project");
+        Assert.Equal(0, (await CliTests.Invoke("project", "init", project, "--kind", "game")).Status);
+        var operations = new JsonArray(Enumerable.Range(0, 17).Select(index => (JsonNode?)new JsonObject
+        { ["op"] = "capture", ["name"] = "frame" + index }).ToArray());
+        File.WriteAllText(Path.Combine(project, "captures.json"), new JsonObject { ["version"] = 1, ["commands"] = operations }.ToJsonString());
+        File.WriteAllText(Path.Combine(project, "gb-tests.json"), """{"version":1,"cases":[{"name":"first","rom":"build/game.gb","script":"captures.json"},{"name":"second","rom":"build/game.gb","script":"captures.json"}]}""");
+        var result = await CliTests.Invoke("project", "test", project, "--build");
+        Assert.Equal("INVALID_SUITE", result.Json["error"]!["code"]!.GetValue<string>());
+        Assert.False(Directory.Exists(Path.Combine(project, "build")));
+    }
+
+    [Fact]
     public async Task BuildCannotReplaceAnAssertionInput()
     {
         var project = PathFor("project");

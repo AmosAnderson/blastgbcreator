@@ -120,6 +120,46 @@ public sealed class RuntimeFeatureTests
     }
 
     [Fact]
+    public void MixedConditionCommandsShareOneMemoryReadBudget()
+    {
+        var commands = new object[]
+        {
+            new { op = "run", frames = 1, maxInstructions = 900_000, until = new { memory = new[] { new { address = 49152, bytes = new int[18] } } } },
+            new { op = "until", frames = 1, maxInstructions = 100_000, memory = new[] { new { address = 49152, bytes = new int[10] } } }
+        };
+        foreach (var command in commands)
+            RuntimeRunner.ValidateDebugScript(JsonSerializer.SerializeToElement(new { version = 1, commands = new[] { command } }));
+        var error = Assert.Throws<ArgumentException>(() => RuntimeRunner.ValidateDebugScript(JsonSerializer.SerializeToElement(new { version = 1, commands })));
+        Assert.Contains("condition memory reads", error.Message);
+    }
+
+    [Fact]
+    public void MixedConditionsCapturesAndTraceShareOneSession()
+    {
+        var result = RuntimeRunner.Debug(Cartridge(), Json("""
+            {"version":1,"commands":[
+              {"op":"run","maxInstructions":10,"traceCapacity":2,"until":{"registers":{"a":42}}},
+              {"op":"capture","name":"loaded"},
+              {"op":"until","maxInstructions":10,"memory":[{"address":49152,"bytes":[42]}]},
+              {"op":"capture","name":"stored"},
+              {"op":"assert","registers":{"pc":341}}
+            ]}
+            """), new DebugOptions { CaptureFramebuffer = true, IncludeProvenance = true });
+
+        Assert.True(result.Completed);
+        Assert.True(result.AssertionsPassed);
+        Assert.True(result.ConditionsPassed);
+        Assert.Equal(3, result.Results[0]["instructionSteps"]!.GetValue<int>());
+        Assert.Equal(2, result.Results[0]["trace"]!.AsArray().Count);
+        Assert.Equal(1, result.Results[2]["instructionSteps"]!.GetValue<int>());
+        Assert.Equal(44, result.Ticks);
+        Assert.Equal(new[] { "loaded", "stored" }, result.Captures.Select(capture => capture.Name));
+        Assert.Equal(result.FramebufferRgba, result.Framebuffer);
+        Assert.Equal(result.FramebufferRgba, result.Captures[^1].Rgba);
+        Assert.Equal(EmulatorSession.Provenance, result.Provenance);
+    }
+
+    [Fact]
     public void BatteryRamRoundTripsEveryBankWithoutMutatingRomOrMapperSelection()
     {
         var rom = Cartridge([0x18, 0xfe]);

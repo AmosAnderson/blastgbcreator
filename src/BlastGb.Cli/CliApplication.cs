@@ -15,15 +15,16 @@ public static partial class CliApplication
     private const string ManifestFormat = "blast-gb-workspace";
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private static readonly JsonSerializerOptions PrettyJson = new(JsonDefaults.Options) { WriteIndented = true };
-    private static readonly HashSet<string> BooleanOptions = ["json", "overwrite", "fix-checksums", "allow-unguarded", "help", "version", "provenance", "build"];
-    private static readonly HashSet<string> OptionNames = [.. BooleanOptions, "output", "offset", "count", "name", "kind", "frames", "memory", "assert", "buttons", "breakpoint", "max-instructions", "script", "patch-output", "screenshot", "symbols", "label", "until", "trace-capacity", "timeout-seconds", "columns", "save-input", "save-output"];
+    private static readonly HashSet<string> BooleanOptions = ["json", "overwrite", "fix-checksums", "allow-unguarded", "help", "version", "build", "provenance"];
+    private static readonly HashSet<string> OptionNames = [.. BooleanOptions, "output", "offset", "count", "name", "kind", "frames", "memory", "assert", "buttons", "breakpoint", "max-instructions", "script", "symbols", "symbol", "screenshot", "capture-dir", "receipt", "suite", "report", "tilemap", "palette", "attrmap", "patch-output", "label", "until", "trace-capacity", "timeout-seconds", "columns", "save-input", "save-output"];
     private static readonly Dictionary<string, Dictionary<string, string>> Groups = new(StringComparer.Ordinal)
     {
-        ["rom"] = new() { ["info"] = "inspect", ["verify"] = "verify", ["patch"] = "patch", ["diff"] = "diff" },
-        ["asm"] = new() { ["compile"] = "build", ["decompile"] = "disassemble" },
-        ["project"] = new() { ["init"] = "init", ["import"] = "import", ["resolve"] = "resolve", ["info"] = "resolve", ["test"] = "suite" },
-        ["game"] = new() { ["lint"] = "lint" },
+        ["rom"] = new() { ["info"] = "inspect", ["verify"] = "verify", ["patch"] = "patch", ["diff"] = "diff", ["patch-create"] = "patch-create" },
+        ["asm"] = new() { ["compile"] = "build", ["decompile"] = "disassemble", ["symbols"] = "symbols" },
+        ["project"] = new() { ["init"] = "init", ["import"] = "import", ["resolve"] = "resolve", ["info"] = "resolve", ["status"] = "project-status", ["test"] = "suite" },
         ["tiles"] = new() { ["import"] = "tiles-import", ["export"] = "tiles-export" },
+        ["game"] = new() { ["lint"] = "lint", ["validate"] = "game-validate", ["export"] = "game-export" },
+        ["asset"] = new() { ["convert"] = "asset-convert", ["encode"] = "asset-encode", ["decode"] = "asset-decode" },
         ["mcp"] = new() { ["serve"] = "mcp" }
     };
 
@@ -100,12 +101,13 @@ public static partial class CliApplication
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
         var command = args.FirstOrDefault(argument => !argument.StartsWith('-')) ?? "help";
-        var wantsJson = args.Contains("--json", StringComparer.Ordinal);
+        var wantsJson = args.TakeWhile(argument => argument != "--").Contains("--json", StringComparer.Ordinal);
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             var parsed = Parse(args);
             command = parsed.Invocation;
+            wantsJson = parsed.Has("json");
             if (parsed.Command == "mcp" && !parsed.Has("help"))
             {
                 parsed.RequirePositionals(0);

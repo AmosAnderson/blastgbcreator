@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BlastGb.Serialization;
@@ -10,6 +11,7 @@ public sealed record Assertions(IReadOnlyList<MemoryAssertion> Memory, IReadOnly
 {
     public string? FramebufferSha256 { get; init; }
 }
+public sealed record FrameCapture(string Name, byte[] Rgba, string Sha256);
 public sealed record RunOptions
 {
     public int Frames { get; init; } = 60;
@@ -56,6 +58,8 @@ public sealed record RunResult(
     public byte[]? Framebuffer { get; init; }
     [JsonIgnore]
     public byte[]? BatterySave { get; init; }
+    [JsonIgnore]
+    public byte[] FramebufferRgba { get; init; } = [];
 }
 
 /// <summary>Bounded execution and assertions with no filesystem or console dependencies.</summary>
@@ -98,13 +102,15 @@ public static partial class RuntimeRunner
             }
         }
         string? framebufferSha256 = null;
-        if (input.TryGetProperty("framebufferSha256", out var hash))
+        if (input.TryGetProperty("framebufferSha256", out var framebuffer))
         {
-            framebufferSha256 = hash.ValueKind == JsonValueKind.String ? hash.GetString() : null;
-            if (framebufferSha256 is null || framebufferSha256.Length != 64 || framebufferSha256.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
-                throw new ArgumentException("framebufferSha256 must contain exactly 64 lowercase hexadecimal characters.");
+            var hash = framebuffer.ValueKind == JsonValueKind.String ? framebuffer.GetString() : null;
+            if (hash is null || hash.Length != 64 || !hash.All(char.IsAsciiHexDigit))
+                throw new ArgumentException("framebufferSha256 must contain exactly 64 hexadecimal characters.");
+            framebufferSha256 = hash.ToLowerInvariant();
         }
-        if (memory.Count == 0 && registers.Count == 0 && framebufferSha256 is null) throw new ArgumentException("An assertion file must contain at least one memory, register, or framebuffer assertion.");
+        if (memory.Count == 0 && registers.Count == 0 && framebufferSha256 is null)
+            throw new ArgumentException("An assertion file must contain at least one memory, register, or framebuffer assertion.");
         return new(memory, registers) { FramebufferSha256 = framebufferSha256 };
     }
 
@@ -125,14 +131,34 @@ public static partial class RuntimeRunner
             int[] actual = session.ReadMemory(item.Address, item.Bytes.Length, cancellationToken).Select(value => (int)value).ToArray();
             checks.Add(new("memory", item.Bytes, actual, actual.SequenceEqual(item.Bytes)) { Address = item.Address });
         }
-        if (expected.FramebufferSha256 is string expectedHash)
+        if (expected.FramebufferSha256 is { } hash)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string actualHash = session.FramebufferSha256();
-            checks.Add(new("framebuffer", expectedHash, actualHash, actualHash == expectedHash));
+            var actual = session.FramebufferSha256();
+            checks.Add(new("framebuffer", hash, actual, string.Equals(hash, actual, StringComparison.Ordinal)));
         }
         return checks;
     }
+
+    private static bool ConditionsMatch(EmulatorSession session, Assertions expected, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (expected.Registers.Count > 0)
+        {
+            var registers = session.Registers;
+            foreach (var (name, value) in expected.Registers)
+                if (registers[name] != value) return false;
+        }
+        foreach (var item in expected.Memory)
+        {
+            var actual = session.ReadMemory(item.Address, item.Bytes.Length, cancellationToken);
+            for (int index = 0; index < actual.Length; index++)
+                if (actual[index] != item.Bytes[index]) return false;
+        }
+        return true;
+    }
+
+    private static string FrameHash(byte[] rgba) => Convert.ToHexStringLower(SHA256.HashData(rgba));
 
     public static RunResult Run(byte[] rom, RunOptions options, CancellationToken cancellationToken = default)
     {
@@ -197,10 +223,11 @@ public static partial class RuntimeRunner
             }
         }
         var checks = CheckAssertions(session, expected, cancellationToken);
+        var framebufferRgba = session.Framebuffer();
         return new("binjgb", options.Frames, frames, session.Ticks, session.Ticks - initialTicks, session.Registers, stopReason,
             options.Memory.Select(range => new MemoryResult(range.Address, range.Length,
                 session.ReadMemory(range.Address, range.Length, cancellationToken).Select(value => (int)value).ToArray())).ToArray(),
-            session.FramebufferSha256(), session.Diagnostics.ToArray(), checks, checks.All(check => check.Passed))
+            FrameHash(framebufferRgba), session.Diagnostics.ToArray(), checks, checks.All(check => check.Passed))
         {
             Breakpoint = options.Breakpoint,
             BreakpointReached = options.Breakpoint is null ? null : breakpointReached,
@@ -208,8 +235,9 @@ public static partial class RuntimeRunner
             UntilReached = until is null ? null : untilReached,
             Trace = options.TraceCapacity == 0 ? null : trace.ToArray(),
             Provenance = options.IncludeProvenance ? EmulatorSession.Provenance : null,
-            Framebuffer = options.CaptureFramebuffer ? session.Framebuffer() : null,
-            BatterySave = options.CaptureBatterySave ? session.ExportBatterySave(cancellationToken) : null
+            Framebuffer = options.CaptureFramebuffer ? framebufferRgba : null,
+            BatterySave = options.CaptureBatterySave ? session.ExportBatterySave(cancellationToken) : null,
+            FramebufferRgba = framebufferRgba
         };
     }
 

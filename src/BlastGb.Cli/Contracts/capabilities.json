@@ -26,8 +26,16 @@
     "verify",
     "disassemble",
     "patch",
-    "doctor",
+    "rom patch-create",
+    "asm symbols",
+    "game validate",
+    "game export",
+    "asset convert",
+    "asset encode",
+    "asset decode",
+    "project status",
     "project test",
+    "doctor",
     "game lint",
     "tiles export",
     "tiles import"
@@ -149,6 +157,7 @@
         "fix-checksums",
         "json",
         "help",
+        "receipt",
         "provenance",
         "timeout-seconds"
       ],
@@ -176,6 +185,7 @@
         "json",
         "help",
         "symbols",
+        "symbol",
         "label"
       ],
       "sideEffects": [
@@ -275,6 +285,7 @@
         "fix-checksums",
         "json",
         "help",
+        "receipt",
         "provenance",
         "timeout-seconds"
       ],
@@ -304,16 +315,17 @@
         "json",
         "help",
         "symbols",
+        "screenshot",
+        "overwrite",
         "until",
         "trace-capacity",
-        "screenshot",
         "save-input",
         "save-output",
-        "provenance",
-        "overwrite"
+        "provenance"
       ],
       "sideEffects": [
         "execute-emulator",
+        "write-screenshot-if-requested",
         "write-capture-or-save-if-requested"
       ]
     },
@@ -338,16 +350,17 @@
         "json",
         "help",
         "symbols",
+        "screenshot",
+        "overwrite",
         "until",
         "trace-capacity",
-        "screenshot",
         "save-input",
         "save-output",
-        "provenance",
-        "overwrite"
+        "provenance"
       ],
       "sideEffects": [
         "execute-emulator",
+        "write-screenshot-if-requested",
         "write-capture-or-save-if-requested"
       ]
     },
@@ -368,14 +381,17 @@
         "help",
         "symbols",
         "screenshot",
+        "overwrite",
+        "capture-dir",
         "save-input",
         "save-output",
-        "provenance",
-        "overwrite"
+        "provenance"
       ],
       "sideEffects": [
         "execute-emulator",
         "write-runtime-bus-if-requested",
+        "write-screenshot-if-requested",
+        "write-captures-if-requested",
         "write-capture-or-save-if-requested"
       ]
     },
@@ -431,6 +447,209 @@
       ]
     },
     {
+      "arguments": [
+        {
+          "name": "before",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        },
+        {
+          "name": "after",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "name": "rom patch-create",
+      "description": "Create guarded patches that reproduce an edited equal-length ROM.",
+      "options": [
+        "output",
+        "overwrite",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "write-patch-file"
+      ]
+    },
+    {
+      "arguments": [
+        {
+          "name": "symbols",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "name": "asm symbols",
+      "description": "Inspect RGBDS labels, banks, physical ROM offsets, and exported constants.",
+      "options": [
+        "symbol",
+        "json",
+        "help"
+      ],
+      "sideEffects": []
+    },
+    {
+      "arguments": [
+        {
+          "name": "game",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "name": "game validate",
+      "description": "Validate a collection-game GameSpec without building or writing.",
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": []
+    },
+    {
+      "arguments": [
+        {
+          "name": "game",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        },
+        {
+          "name": "directory",
+          "type": "path",
+          "required": true,
+          "role": "output"
+        }
+      ],
+      "name": "game export",
+      "description": "Export a customized GameSpec into a new editable source project.",
+      "options": [
+        "name",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "create-project-directory"
+      ]
+    },
+    {
+      "arguments": [
+        {
+          "name": "image",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "name": "asset convert",
+      "description": "Convert PNG graphics into Game Boy tiles and optional tilemap, CGB palette and attributes using rgbgfx.",
+      "options": [
+        "output",
+        "tilemap",
+        "palette",
+        "attrmap",
+        "overwrite",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "execute-rgbds",
+        "write-graphics-assets"
+      ]
+    },
+    {
+      "arguments": [
+        {
+          "name": "pixels",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "name": "asset encode",
+      "description": "Encode a tile-major JSON array of palette indices 0-3 into planar 2bpp tiles.",
+      "options": [
+        "output",
+        "overwrite",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "write-graphics-assets"
+      ]
+    },
+    {
+      "arguments": [
+        {
+          "name": "tiles",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "name": "asset decode",
+      "description": "Decode planar 2bpp tiles into a numeric JSON pixel array.",
+      "options": [
+        "output",
+        "overwrite",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "write-graphics-assets"
+      ]
+    },
+    {
+      "arguments": [
+        {
+          "name": "project",
+          "type": "path",
+          "required": false,
+          "role": "input"
+        }
+      ],
+      "name": "project status",
+      "description": "Check receipt input, output and tool hashes without writing or building.",
+      "options": [
+        "receipt",
+        "json",
+        "help"
+      ],
+      "sideEffects": []
+    },
+    {
+      "arguments": [
+        {
+          "name": "project-or-suite",
+          "type": "path",
+          "required": false,
+          "role": "input"
+        }
+      ],
+      "name": "project test",
+      "description": "Run project-ROM or standalone per-case-ROM suites in fresh sessions, with optional one-time build and project-suite reports/captures.",
+      "options": [
+        "suite",
+        "build",
+        "overwrite",
+        "report",
+        "capture-dir",
+        "symbols",
+        "json",
+        "help",
+        "timeout-seconds"
+      ],
+      "sideEffects": [
+        "execute-emulator",
+        "build-if-requested",
+        "write-report-and-captures-if-requested",
+        "write-build-artifacts-if-requested",
+        "execute-rgbds-for-assembly-build"
+      ]
+    },
+    {
       "name": "doctor",
       "description": "Report host/tool identities and perform a bundled runtime smoke check.",
       "arguments": [],
@@ -441,30 +660,6 @@
       "sideEffects": [
         "execute-tool-version-probes",
         "execute-emulator"
-      ]
-    },
-    {
-      "name": "project test",
-      "description": "Execute a bounded, named suite in independent emulator sessions.",
-      "arguments": [
-        {
-          "name": "suite",
-          "type": "path",
-          "required": false,
-          "role": "input"
-        }
-      ],
-      "options": [
-        "build",
-        "overwrite",
-        "timeout-seconds",
-        "json",
-        "help"
-      ],
-      "sideEffects": [
-        "execute-emulator",
-        "write-build-artifacts-if-requested",
-        "execute-rgbds-for-assembly-build"
       ]
     },
     {
@@ -597,7 +792,7 @@
     },
     "memory": {
       "type": "string",
-      "description": "Mapped address:length ranges separated by commas; at most 65536 bytes total."
+      "description": "Mapped address:length ranges, or label:length with --symbols; at most 65536 bytes total."
     },
     "assert": {
       "type": "path",
@@ -624,10 +819,8 @@
       ]
     },
     "breakpoint": {
-      "type": "address-or-symbol",
-      "minimum": 0,
-      "maximum": 65535,
-      "description": "Mapped CPU program-counter address."
+      "type": "string",
+      "description": "Mapped 16-bit CPU address (decimal or 0x hex), or a fixed-bank label with --symbols."
     },
     "max-instructions": {
       "type": "integer",
@@ -636,30 +829,73 @@
       "default": 1000000,
       "description": "Step budget while seeking a breakpoint."
     },
+    "symbols": {
+      "description": "Read RGBDS symbols; runtime labels must name fixed-bank ROM0, WRAM0 or HRAM addresses. Constants and banked labels cannot resolve runtime addresses.",
+      "type": "path",
+      "role": "input"
+    },
+    "suite": {
+      "description": "Version-1 named project test suite; defaults to manifest tests or tests.json.",
+      "type": "path",
+      "role": "input"
+    },
+    "screenshot": {
+      "description": "Final 160x144 RGBA PNG, including assertion failures.",
+      "type": "path",
+      "role": "output"
+    },
+    "capture-dir": {
+      "description": "Directory for named debug/suite PNG captures.",
+      "type": "path",
+      "role": "output"
+    },
+    "report": {
+      "description": "Structured JSON suite report.",
+      "type": "path",
+      "role": "output"
+    },
+    "tilemap": {
+      "description": "Tile-index map from rgbgfx.",
+      "type": "path",
+      "role": "output"
+    },
+    "palette": {
+      "description": "CGB RGB15 palette bytes from rgbgfx.",
+      "type": "path",
+      "role": "output"
+    },
+    "attrmap": {
+      "description": "CGB attribute map from rgbgfx.",
+      "type": "path",
+      "role": "output"
+    },
+    "receipt": {
+      "description": "Build receipt output, or receipt input for project status.",
+      "type": "path"
+    },
+    "symbol": {
+      "description": "Exact case-sensitive label name; disassembly requires a physical ROM label.",
+      "type": "string"
+    },
+    "build": {
+      "description": "Build once before running a validated project suite.",
+      "type": "boolean",
+      "default": false
+    },
     "patch-output": {
       "type": "path",
       "role": "output",
       "description": "Write every equal-length ROM difference as complete guarded patches; previews remain bounded."
     },
-    "screenshot": {
-      "type": "path",
-      "role": "output",
-      "description": "Capture final 160x144 RGBA framebuffer as PNG, including failed assertion evidence."
-    },
-    "symbols": {
-      "type": "path",
-      "role": "input",
-      "description": "Read RGBDS symbols; named breakpoints use mapped addresses in any active bank."
-    },
     "label": {
       "type": "string",
-      "description": "Select a ROM symbol for disassembly; requires symbols and excludes offset."
+      "description": "Alias for symbol when selecting a ROM label for disassembly; requires symbols and excludes offset and symbol."
     },
     "until": {
       "type": "path",
       "role": "input",
       "schema": "assertions",
-      "description": "Stop at the first matching after-step memory/register condition; excludes framebuffer checks."
+      "description": "Stop at the first matching initial or after-step memory/register condition; excludes framebuffer checks."
     },
     "trace-capacity": {
       "type": "integer",
@@ -696,11 +932,6 @@
       "type": "path",
       "role": "output",
       "description": "Write final raw battery RAM to a separate staged file."
-    },
-    "build": {
-      "type": "boolean",
-      "default": false,
-      "description": "Build the suite directory project before executing cases."
     }
   },
   "requiredOptions": {
@@ -712,6 +943,18 @@
     ],
     "debug": [
       "script"
+    ],
+    "rom patch-create": [
+      "output"
+    ],
+    "asset convert": [
+      "output"
+    ],
+    "asset encode": [
+      "output"
+    ],
+    "asset decode": [
+      "output"
     ],
     "tiles import": [
       "output"
@@ -748,6 +991,10 @@
     {
       "name": "suite",
       "command": "gb schema suite --json"
+    },
+    {
+      "name": "build-receipt",
+      "command": "gb schema build-receipt --json"
     }
   ],
   "manifest": {
@@ -766,7 +1013,10 @@
       "rgblink"
     ],
     "gameSpecBuild": [],
-    "headlessRuntime": []
+    "headlessRuntime": [],
+    "graphicsConversion": [
+      "rgbgfx"
+    ]
   },
   "patchSchema": {
     "file": "array",
@@ -780,6 +1030,9 @@
     "Disassembly cannot recover original symbols, comments, or code/data boundaries.",
     "Banked runtime breakpoints use mapped 16-bit addresses in any current bank.",
     "Runtime tests are bounded emulator evidence, not hardware certification.",
+    "Runtime label references support bank-0 ROM0, WRAM0 and HRAM; ambiguous banked labels are rejected. Explicit numeric addresses retain current-bank semantics.",
+    "GameSpec implements a bounded collection-game engine; source export permits custom assembly extensions.",
+    "PNG conversion supports at most 4096 8x8 tiles; palette and attribute output are CGB-oriented.",
     "Raw battery saves exclude RTC data and support only explicitly validated battery-RAM mapper types.",
     "Tile PNG import supports non-interlaced 8-bit opaque grayscale/RGB/indexed/RGBA with shades 255,170,85,0."
   ]

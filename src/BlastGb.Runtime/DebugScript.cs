@@ -11,6 +11,7 @@ public static class DebugLimits
     public const int Instructions = 1_000_000;
     public const int MemoryBytes = 1_048_576;
     public const int Breakpoints = 256;
+    public const int Captures = 32;
 }
 
 public abstract record DebugCommand(string Op);
@@ -25,6 +26,8 @@ public sealed record RunCommand(int Frames, int MaxInstructions) : DebugCommand(
 }
 public sealed record ButtonsCommand(string[] Pressed) : DebugCommand("buttons");
 public sealed record AssertCommand(Assertions Expected) : DebugCommand("assert");
+public sealed record UntilCommand(int Frames, int MaxInstructions, Assertions Expected) : DebugCommand("until");
+public sealed record CaptureCommand(string Name) : DebugCommand("capture");
 public sealed record DebugScript(int Version, IReadOnlyList<DebugCommand> Commands);
 public sealed record DebugResult(
     string Engine, double Ticks, CpuRegisters Registers, int[] Breakpoints,
@@ -40,6 +43,10 @@ public sealed record DebugResult(
     public byte[]? Framebuffer { get; init; }
     [JsonIgnore]
     public byte[]? BatterySave { get; init; }
+    [JsonIgnore]
+    public IReadOnlyList<FrameCapture> Captures { get; init; } = [];
+    [JsonIgnore]
+    public byte[] FramebufferRgba { get; init; } = [];
 }
 
 public static partial class RuntimeRunner
@@ -59,6 +66,7 @@ public static partial class RuntimeRunner
         long memoryBytes = 0, conditionMemoryReads = 0;
         int traceEntries = 0;
         var commands = new List<DebugCommand>();
+        var captureNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var command in operations.EnumerateArray())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -121,13 +129,32 @@ public static partial class RuntimeRunner
                     }
                     commands.Add(new RunCommand(frames, instructions) { Until = until, TraceCapacity = traceCapacity });
                     break;
+                case "until":
+                    ValidateFields(command, ["op", "frames", "maxInstructions", "memory", "registers"], op);
+                    int untilFrames = OptionalInteger(command, "frames", 60, 1, DebugLimits.Frames);
+                    int untilInstructions = OptionalInteger(command, "maxInstructions", 100_000, 1, DebugLimits.Instructions);
+                    var conditions = CommandAssertions(command, cancellationToken);
+                    frameBudget += untilFrames;
+                    instructionBudget += untilInstructions;
+                    // Reserve every possible condition read, including initial and final evidence checks.
+                    // Otherwise a small script could perform billions of mapped bus reads.
+                    long untilMemoryReads = conditions.Memory.Sum(item => (long)item.Bytes.Length) * (untilInstructions + 2L);
+                    memoryBytes += untilMemoryReads;
+                    conditionMemoryReads += untilMemoryReads;
+                    commands.Add(new UntilCommand(untilFrames, untilInstructions, conditions));
+                    break;
+                case "capture":
+                    ValidateFields(command, ["op", "name"], op);
+                    var nameValue = Required(command, "name");
+                    var name = nameValue.ValueKind == JsonValueKind.String ? nameValue.GetString() : null;
+                    if (!ValidCaptureName(name)) throw new ArgumentException("Capture name must be a safe 1–64 character label; device names and failure-N labels are reserved.");
+                    if (!captureNames.Add(name!)) throw new ArgumentException($"Duplicate capture name {name}.");
+                    if (captureNames.Count > DebugLimits.Captures) throw new ArgumentException($"A script may capture at most {DebugLimits.Captures} frames.");
+                    commands.Add(new CaptureCommand(name!));
+                    break;
                 case "assert":
                     ValidateFields(command, ["op", "memory", "registers", "framebufferSha256"], op);
-                    var assertion = new JsonObject();
-                    if (command.TryGetProperty("memory", out var memory)) assertion["memory"] = JsonNode.Parse(memory.GetRawText());
-                    if (command.TryGetProperty("registers", out var registers)) assertion["registers"] = JsonNode.Parse(registers.GetRawText());
-                    if (command.TryGetProperty("framebufferSha256", out var hash)) assertion["framebufferSha256"] = JsonNode.Parse(hash.GetRawText());
-                    var expected = NormalizeAssertions(JsonSerializer.SerializeToElement(assertion), cancellationToken);
+                    var expected = CommandAssertions(command, cancellationToken);
                     memoryBytes += expected.Memory.Sum(item => (long)item.Bytes.Length);
                     commands.Add(new AssertCommand(expected));
                     break;
@@ -141,6 +168,24 @@ public static partial class RuntimeRunner
         if (instructionBudget > DebugLimits.Instructions) throw new ArgumentException($"The script instruction budgets may total at most {DebugLimits.Instructions}.");
         if (memoryBytes > DebugLimits.MemoryBytes) throw new ArgumentException($"The script read, write, and assertion memory may total at most {DebugLimits.MemoryBytes} bytes.");
         return new(1, commands);
+    }
+
+    private static Assertions CommandAssertions(JsonElement command, CancellationToken cancellationToken)
+    {
+        var assertion = new JsonObject();
+        foreach (var name in new[] { "memory", "registers", "framebufferSha256" })
+            if (command.TryGetProperty(name, out var value)) assertion[name] = JsonNode.Parse(value.GetRawText());
+        return NormalizeAssertions(JsonSerializer.SerializeToElement(assertion), cancellationToken);
+    }
+
+    private static bool ValidCaptureName(string? name)
+    {
+        if (name is null || name.Length is < 1 or > 64 || !char.IsAsciiLetterOrDigit(name[0]) ||
+            !name.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-')) return false;
+        var upper = name.ToUpperInvariant();
+        if (upper is "CON" or "PRN" or "AUX" or "NUL" || upper.Length == 4 &&
+            (upper.StartsWith("COM", StringComparison.Ordinal) || upper.StartsWith("LPT", StringComparison.Ordinal)) && upper[3] is >= '1' and <= '9') return false;
+        return !upper.StartsWith("FAILURE-", StringComparison.Ordinal) || upper.Length == 8 || !upper[8..].All(char.IsAsciiDigit);
     }
 
     /// <summary>Runs an ordered script in one isolated session, stopping at failed expectations.</summary>
@@ -157,6 +202,7 @@ public static partial class RuntimeRunner
         if (options.CaptureBatterySave) _ = session.ExportBatterySave(cancellationToken);
         double initialTicks = session.Ticks;
         var results = new List<JsonObject>();
+        var captures = new List<FrameCapture>();
         bool assertionsPassed = true;
         bool? conditionsPassed = null;
         var heldButtons = new HashSet<string>(StringComparer.Ordinal);
@@ -180,6 +226,14 @@ public static partial class RuntimeRunner
             data["ticks"] = state.Ticks;
             data["registers"] = JsonSerializer.SerializeToNode(state.Registers, JsonOptions);
             data["breakpoints"] = JsonSerializer.SerializeToNode(state.Breakpoints);
+        }
+        FrameCapture Capture(string name)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rgba = session.Framebuffer();
+            var capture = new FrameCapture(name, rgba, FrameHash(rgba));
+            captures.Add(capture);
+            return capture;
         }
         foreach (var command in script.Commands)
         {
@@ -207,6 +261,12 @@ public static partial class RuntimeRunner
                     session.SetBreakpoints(points.Addresses);
                     resumeBreakpoint = null;
                     data["addresses"] = JsonSerializer.SerializeToNode(session.Snapshot().Breakpoints);
+                    break;
+                case CaptureCommand capture:
+                    var captured = Capture(capture.Name);
+                    data["name"] = captured.Name;
+                    data["framebufferSha256"] = captured.Sha256;
+                    AddSnapshot(data);
                     break;
                 case AdvanceCommand advance:
                     {
@@ -277,8 +337,48 @@ public static partial class RuntimeRunner
                     assertionsPassed &= passed;
                     data["assertions"] = JsonSerializer.SerializeToNode(checks, JsonOptions);
                     data["assertionsPassed"] = passed;
-                    if (!passed) stopReason = "assertion-failed";
+                    if (!passed)
+                    {
+                        stopReason = "assertion-failed";
+                        if (checks.Any(check => check.Kind == "framebuffer" && !check.Passed) && captures.Count < DebugLimits.Captures)
+                        {
+                            var failure = Capture($"failure-{results.Count}");
+                            data["capture"] = failure.Name;
+                        }
+                    }
                     break;
+                case UntilCommand until:
+                    {
+                        double target = startTicks + until.Frames * EmulatorSession.FrameTicks;
+                        int instructions = 0, frames = 0;
+                        bool matched = ConditionsMatch(session, until.Expected, cancellationToken);
+                        bool stopped = !matched && StopAtCurrentBreakpoint();
+                        stopReason = matched ? "condition" : stopped ? "breakpoint" : "frame-budget";
+                        while (!matched && !stopped && session.Ticks < target)
+                        {
+                            if (instructions >= until.MaxInstructions) { stopReason = "instruction-budget"; break; }
+                            var state = session.Advance(1, () => frames++, cancellationToken: cancellationToken);
+                            instructions++;
+                            matched = ConditionsMatch(session, until.Expected, cancellationToken);
+                            if (state.StopReason == "breakpoint")
+                            {
+                                resumeBreakpoint = state.Registers.PC;
+                                stopped = true;
+                                stopReason = "breakpoint";
+                            }
+                            if (matched) stopReason = "condition";
+                        }
+                        assertionsPassed &= matched;
+                        data["requestedFrames"] = until.Frames;
+                        data["frames"] = frames;
+                        data["instructionSteps"] = instructions;
+                        data["conditionReached"] = matched;
+                        data["assertions"] = JsonSerializer.SerializeToNode(CheckAssertions(session, until.Expected, cancellationToken), JsonOptions);
+                        data["assertionsPassed"] = matched;
+                        data["stopReason"] = stopReason;
+                        AddSnapshot(data);
+                        break;
+                    }
             }
             data["elapsedTicks"] = session.Ticks - startTicks;
             results.Add(data);
@@ -286,14 +386,17 @@ public static partial class RuntimeRunner
             if (!assertionsPassed || conditionsPassed == false) break;
         }
         var snapshot = session.Snapshot();
+        var framebufferRgba = session.Framebuffer();
         return new("binjgb", snapshot.Ticks, snapshot.Registers, snapshot.Breakpoints, session.Ticks - initialTicks,
             stopReason, script.Commands.Count, results.Count == script.Commands.Count && conditionsPassed != false, results, assertionsPassed,
-            session.FramebufferSha256(), session.Diagnostics.ToArray())
+            FrameHash(framebufferRgba), session.Diagnostics.ToArray())
         {
             ConditionsPassed = conditionsPassed,
             Provenance = options.IncludeProvenance ? EmulatorSession.Provenance : null,
-            Framebuffer = options.CaptureFramebuffer ? session.Framebuffer() : null,
-            BatterySave = options.CaptureBatterySave ? session.ExportBatterySave(cancellationToken) : null
+            Framebuffer = options.CaptureFramebuffer ? framebufferRgba : null,
+            BatterySave = options.CaptureBatterySave ? session.ExportBatterySave(cancellationToken) : null,
+            Captures = captures,
+            FramebufferRgba = framebufferRgba
         };
     }
 }

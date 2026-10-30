@@ -25,7 +25,7 @@ try
         Require(archive.GetEntry("third_party/wasmtime/LICENSE") is not null, "Wasmtime license missing");
         Require(archive.GetEntry("examples/hello/source/main.asm") is not null, "assembly example missing");
         Require(!archive.Entries.Any(entry => entry.FullName.EndsWith(".js", StringComparison.Ordinal) || entry.FullName.EndsWith(".ts", StringComparison.Ordinal)), "legacy JavaScript/TypeScript in package");
-        foreach (string name in new[] { "gb-project.json", "checks.json", "debug.json", "source/main.asm" })
+        foreach (string name in new[] { "gb-project.json", "checks.json", "debug.json", "tests.json", "input-sequence.json", "gb-tests.json", "source/main.asm" })
         {
             var destination = Path.Combine(packagedExample, name);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -46,25 +46,30 @@ try
     Require((await CommandAsync("version"))["version"]!.GetValue<string>() == "0.4.1", "package version");
     Require((await RunAsync(executable, ["--help"], temporary)).StartsWith("Blast GB Tools 0.4.1\n", StringComparison.Ordinal), "help version");
     Require((await CommandAsync("capabilities"))["commands"]!.AsArray().Any(item => item!.GetValue<string>() == "debug"), "debug discovery");
-    await CommandAsync("schema", "project");
-    await CommandAsync("schema", "game");
-    await CommandAsync("schema", "suite");
+    foreach (var schema in new[] { "project", "debug", "assertions", "game", "suite", "build-receipt" })
+        await CommandAsync("schema", schema);
     var doctor = await CommandAsync("doctor");
     Require(doctor["runtimeHealthy"]!.GetValue<bool>(), "installed runtime health probe");
     Require(doctor["engine"]!["engine"]!.GetValue<string>() == "binjgb", "installed engine identity");
     Require(doctor["engine"]!["engineSha256"]!.GetValue<string>() == "52c165069441a09180b4bd63464318aa7b861b1d36e0d05e8047b48619fd2f0b", "installed immutable engine hash");
     var project = Path.Combine(temporary, "sample game");
     await CommandAsync("project", "init", project, "--kind", "game");
-    var build = await CommandAsync("build", project);
+    await CommandAsync("game", "validate", Path.Combine(project, "game.json"));
+    await CommandAsync("game", "export", Path.Combine(project, "game.json"), Path.Combine(temporary, "source export"));
+    var receipt = Path.Combine(project, "build", "receipt.json");
+    var build = await CommandAsync("build", project, "--receipt", receipt);
+    Require((await CommandAsync("project", "status", project, "--receipt", receipt))["valid"]!.GetValue<bool>(), "installed build receipt");
     var rom = build["output"]!.GetValue<string>();
     await CommandAsync("rom", "verify", rom);
     var assertions = Path.Combine(temporary, "checks.json");
     await File.WriteAllTextAsync(assertions, """{"memory":[{"address":49152,"bytes":[9]}]}""");
-    var tested = await CommandAsync("test", rom, "--frames", "10", "--assert", assertions);
+    var screenshot = Path.Combine(temporary, "final.png");
+    var tested = await CommandAsync("test", rom, "--frames", "10", "--assert", assertions, "--screenshot", screenshot);
     Require(tested["assertionsPassed"]!.GetValue<bool>(), "installed runtime assertion");
-    var screenshot = Path.Combine(temporary, "frame.png");
-    var captured = await CommandAsync("run", rom, "--frames", "10", "--screenshot", screenshot, "--provenance");
-    string pixelHash = Convert.ToHexStringLower(SHA256.HashData(ReadScreenshotPixels(File.ReadAllBytes(screenshot))));
+    Require(File.ReadAllBytes(screenshot).AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }), "installed PNG encoder");
+    var capturedScreenshot = Path.Combine(temporary, "frame.png");
+    var captured = await CommandAsync("run", rom, "--frames", "10", "--screenshot", capturedScreenshot, "--provenance");
+    string pixelHash = Convert.ToHexStringLower(SHA256.HashData(ReadScreenshotPixels(File.ReadAllBytes(capturedScreenshot))));
     Require(captured["framebufferSha256"]!.GetValue<string>() == pixelHash, "screenshot pixels match framebuffer hash");
     Require(captured["toolkitVersion"]!.GetValue<string>() == "0.4.1", "execution toolkit provenance");
     Require(JsonNode.DeepEquals(captured["provenance"], doctor["engine"]), "execution engine provenance");
@@ -112,6 +117,23 @@ try
     var patched = Path.Combine(temporary, "roundtrip.gb");
     await CommandAsync("rom", "patch", rom, patch, "--output", patched);
     Require(File.ReadAllBytes(patched).SequenceEqual(changed), "installed guarded patch export round-trip");
+    await File.WriteAllTextAsync(script, """
+        {"version":1,"commands":[{"op":"until","memory":[{"address":49152,"bytes":[9]}],"frames":10,"maxInstructions":100000},
+          {"op":"buttons","pressed":["right"]},{"op":"frame","count":3},
+          {"op":"buttons","pressed":[]},{"op":"capture","name":"ready"}]}
+        """);
+    await CommandAsync("debug", rom, "--script", script, "--capture-dir", Path.Combine(temporary, "captures"));
+    var suitePath = Path.Combine(temporary, "suite.json");
+    await File.WriteAllTextAsync(suitePath, """{"version":1,"cases":[{"name":"gameplay","script":"debug.json"},{"name":"boot","frames":10,"assert":"checks.json"}]}""");
+    Require((await CommandAsync("project", "test", project, "--suite", suitePath, "--report", Path.Combine(temporary, "report.json")))["passed"]!.GetValue<int>() == 2, "installed project suite");
+    var emptyPatch = Path.Combine(temporary, "empty-patch.json");
+    await CommandAsync("rom", "patch-create", rom, rom, "--output", emptyPatch);
+    await CommandAsync("rom", "patch", rom, emptyPatch, "--output", Path.Combine(temporary, "copy.gb"));
+    var pixels = Path.Combine(temporary, "pixels.json");
+    await File.WriteAllTextAsync(pixels, "[" + string.Join(',', Enumerable.Repeat(0, 64)) + "]");
+    var tiles = Path.Combine(temporary, "tiles.2bpp");
+    await CommandAsync("asset", "encode", pixels, "--output", tiles);
+    await CommandAsync("asset", "decode", tiles, "--output", Path.Combine(temporary, "decoded.json"));
     var imported = Path.Combine(temporary, "mod project");
     await CommandAsync("project", "import", rom, imported);
     Require(File.ReadAllBytes(Path.Combine(imported, "original.gb")).SequenceEqual(File.ReadAllBytes(rom)), "import preserves original bytes");
@@ -126,7 +148,7 @@ try
         Console.WriteLine("PASS: installed tool compiles and runs the packaged hello example with native RGBDS.");
     }
     else Console.WriteLine("SKIP: native packaged-example compilation requires RGBDS_BIN.");
-    Console.WriteLine("PASS: .NET tool installs temporarily and verifies build, input, captures, hashes, patches, suites, and debugger workflows.");
+    Console.WriteLine("PASS: .NET tool installs temporarily and verifies build, input, captures, hashes, patches, suites, authoring, graphics, receipts, and debugger workflows.");
 }
 finally
 {

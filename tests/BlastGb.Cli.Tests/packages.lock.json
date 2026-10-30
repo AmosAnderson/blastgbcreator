@@ -104,8 +104,8 @@
       "BlastGb.Tools": {
         "type": "Project",
         "dependencies": {
-          "BlastGb.Core": "[0.4.0, )",
-          "BlastGb.Runtime": "[0.4.0, )"
+          "BlastGb.Core": "[0.4.1, )",
+          "BlastGb.Runtime": "[0.4.1, )"
         }
       }
     }

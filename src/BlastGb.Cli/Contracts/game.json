@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:blast-gb:schema:game:1",
-  "title": "Original collection-game specification",
+  "title": "Built-in collection-game specification",
+  "description": "The fixed collection engine supports one 20 by 18 map. Runtime validation additionally requires one player, 1..99 collectibles, and reachability of every collectible. Objective text does not add mechanics. Unknown fields are ignored for compatibility.",
   "type": "object",
   "required": [
     "title",
@@ -14,18 +15,15 @@
     "title": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 40
+      "maxLength": 40,
+      "pattern": "\\S",
+      "description": "Trimmed by the compiler; validation limits the title to 40 UTF-16 code units."
     },
     "mode": {
       "enum": [
         "gb",
         "gbc"
       ]
-    },
-    "objective": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 240
     },
     "palette": {
       "type": "object",
@@ -38,24 +36,19 @@
       ],
       "properties": {
         "background": {
-          "type": "string",
-          "pattern": "^#[0-9a-fA-F]{6}$"
+          "$ref": "#/$defs/color"
         },
         "ground": {
-          "type": "string",
-          "pattern": "^#[0-9a-fA-F]{6}$"
+          "$ref": "#/$defs/color"
         },
         "wall": {
-          "type": "string",
-          "pattern": "^#[0-9a-fA-F]{6}$"
+          "$ref": "#/$defs/color"
         },
         "player": {
-          "type": "string",
-          "pattern": "^#[0-9a-fA-F]{6}$"
+          "$ref": "#/$defs/color"
         },
         "collectible": {
-          "type": "string",
-          "pattern": "^#[0-9a-fA-F]{6}$"
+          "$ref": "#/$defs/color"
         }
       }
     },
@@ -68,8 +61,22 @@
         "minLength": 20,
         "maxLength": 20,
         "pattern": "^[#.PC]{20}$"
-      },
-      "description": "Runtime lint also requires exactly one player, 1\u201399 collectibles, and reachability of every collectible."
+      }
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "\\S",
+      "description": "Descriptive text only, trimmed by the compiler and limited to 240 UTF-16 code units."
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "string",
+      "minLength": 7,
+      "maxLength": 7,
+      "pattern": "^#[0-9a-fA-F]{6}$"
     }
   }
 }
