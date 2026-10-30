@@ -11,10 +11,12 @@ namespace BlastGb.Cli;
 
 public static partial class CliApplication
 {
-    private static async Task<JsonObject> BuildAsync(ParsedCommand parsed, CancellationToken cancellationToken)
+    private static async Task<JsonObject> BuildAsync(ParsedCommand parsed, CancellationToken cancellationToken, IReadOnlyList<string>? additionalProtectedInputs = null)
     {
         parsed.RequirePositionals(0, 1);
-        parsed.AllowOptions("output", "overwrite", "fix-checksums");
+        parsed.AllowOptions("output", "overwrite", "fix-checksums", "provenance", "timeout-seconds");
+        int timeoutSeconds = Integer(parsed.Option("timeout-seconds") ?? "120", "timeout-seconds", 600);
+        if (timeoutSeconds == 0) throw new CliException("USAGE", "timeout-seconds must be between 1 and 600.");
         var input = Path.GetFullPath(parsed.Positionals.FirstOrDefault() ?? ".");
         var projectPath = Directory.Exists(input) ? Path.Combine(input, ManifestFile) : input;
         var root = Path.GetDirectoryName(projectPath)!;
@@ -47,6 +49,7 @@ public static partial class CliApplication
         }
         if (parsed.Option("output") is { } destination) output = Path.GetFullPath(destination);
         var protectedInputs = new List<string> { projectPath };
+        if (additionalProtectedInputs is not null) protectedInputs.AddRange(additionalProtectedInputs);
         if (source is not null) protectedInputs.Add(source);
         if (game is not null) protectedInputs.Add(game);
         if (manifest?.Rom is not null) protectedInputs.Add(FileOperations.WorkspacePath(root, manifest.Rom, "rom"));
@@ -86,13 +89,13 @@ public static partial class CliApplication
                         exactSize = (int)originalSize;
                     }
                 }
-                await RunRgbdsAsync("rgbasm", ["-I", root + Path.DirectorySeparatorChar, "-I", Path.GetDirectoryName(source!) + Path.DirectorySeparatorChar, "-M", dependencyFile, "-MT", dependencyTarget, "-o", objectPath, source!], root, cancellationToken);
+                await RunRgbdsAsync("rgbasm", ["-I", root + Path.DirectorySeparatorChar, "-I", Path.GetDirectoryName(source!) + Path.DirectorySeparatorChar, "-M", dependencyFile, "-MT", dependencyTarget, "-o", objectPath, source!], root, timeoutSeconds, cancellationToken);
                 var dependencyInfo = new FileInfo(dependencyFile);
                 if (!dependencyInfo.Exists || dependencyInfo.Length > 16 * 1024 * 1024)
                     throw new CliException("BUILD_FAILED", "Cannot confirm assembler inputs: missing or oversized dependency report. No output was replaced.");
                 protectedInputs.AddRange(AssemblyDependencies.Parse(File.ReadAllBytes(dependencyFile), dependencyTarget, root, source!));
                 foreach (var artifact in outputs) FileOperations.ProtectDestination(artifact, protectedInputs);
-                await RunRgbdsAsync("rgblink", ["-n", symbolFile, "-m", mapFile, "-o", cartridge, objectPath], root, cancellationToken);
+                await RunRgbdsAsync("rgblink", ["-n", symbolFile, "-m", mapFile, "-o", cartridge, objectPath], root, timeoutSeconds, cancellationToken);
                 var cartridgeSize = new FileInfo(cartridge).Length;
                 if (cartridgeSize is < 0x150 or > 8 * 1024 * 1024)
                     throw new CliException("BUILD_FAILED", "RGBDS output must be between 336 bytes and 8 MiB.");
@@ -118,9 +121,25 @@ public static partial class CliApplication
         var artifacts = new List<FileOperations.Artifact> { new(output, rom) };
         if (symbols is not null) artifacts.Add(new FileOperations.Artifact(symbolPath, symbols));
         if (map is not null) artifacts.Add(new FileOperations.Artifact(mapPath, map));
+        object? provenance = null;
+        if (parsed.Has("provenance"))
+        {
+            var tools = new List<object>();
+            if (source is not null)
+                foreach (string tool in new[] { "rgbasm", "rgblink" }) tools.Add(await ToolIdentityAsync(tool, cancellationToken));
+            provenance = new
+            {
+                toolkitVersion = AutomationContracts.Version,
+                engine = game is not null ? (object)new { name = "builtin-gamespec", version = GameCompiler.EngineVersion } : new { name = "rgbds", tools },
+                // These identify files observed after compilation, not an atomic source snapshot.
+                observedInputs = protectedInputs.Distinct(StringComparer.Ordinal).Select(path => new { path, sha256 = Sha256(File.ReadAllBytes(path)) }).ToArray()
+            };
+        }
+        cancellationToken.ThrowIfCancellationRequested();
         FileOperations.AtomicWriteBatch(artifacts, overwrite);
         var result = ToObject(new { output, size = rom.Length, sha256 = Sha256(rom), inspection = RomTools.Inspect(rom), engine = game is not null ? "builtin-gamespec" : "rgbds" });
         if (symbols is not null) { result["symbols"] = symbolPath; result["map"] = mapPath; }
+        if (provenance is not null) result["provenance"] = JsonSerializer.SerializeToNode(provenance, JsonDefaults.Options);
         return result;
     }
 
@@ -157,10 +176,9 @@ public static partial class CliApplication
             throw new CliException("BUILD_FAILED", "Cannot confirm ROM section bounds from the RGBDS map. Refusing to trim potentially assembled content; update RGBDS or remove romSize deliberately.");
     }
 
-    private static async Task RunRgbdsAsync(string tool, string[] arguments, string cwd, CancellationToken cancellationToken)
+    private static async Task RunRgbdsAsync(string tool, string[] arguments, string cwd, int timeoutSeconds, CancellationToken cancellationToken)
     {
-        var bin = Environment.GetEnvironmentVariable("RGBDS_BIN");
-        var executable = string.IsNullOrEmpty(bin) ? tool : Path.Combine(bin, OperatingSystem.IsWindows() ? tool + ".exe" : tool);
+        var executable = ToolExecutable(tool);
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo(executable)
@@ -183,6 +201,7 @@ public static partial class CliApplication
         }
         process.StandardInput.Close();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        linked.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         var stdout = ReadBoundedOutputAsync(process.StandardOutput, linked);
         var stderr = ReadBoundedOutputAsync(process.StandardError, linked);
         try { await Task.WhenAll(process.WaitForExitAsync(linked.Token), stdout, stderr); }
@@ -192,6 +211,8 @@ public static partial class CliApplication
             catch (InvalidOperationException) { }
             await process.WaitForExitAsync(CancellationToken.None);
             cancellationToken.ThrowIfCancellationRequested();
+            if (exception is OperationCanceledException)
+                throw new CliException("BUILD_TIMEOUT", $"{tool} exceeded its {timeoutSeconds}-second deadline. No output was replaced.", exception);
             throw new CliException("BUILD_FAILED", $"{tool} failed: {exception.Message}", exception);
         }
         if (process.ExitCode != 0)

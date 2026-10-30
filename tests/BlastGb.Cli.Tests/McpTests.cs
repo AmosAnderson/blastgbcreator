@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using BlastGb.Cli;
 
 namespace BlastGb.Cli.Tests;
@@ -28,6 +29,202 @@ public sealed class McpTests
 
     private static string Call(int id, string name, object? arguments = null) =>
         JsonSerializer.Serialize(new { jsonrpc = "2.0", id, method = "tools/call", @params = new { name, arguments } }) + "\n";
+
+    private sealed class MessageStream : Stream
+    {
+        private readonly Channel<byte[]> messages = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+        private byte[] current = [];
+        private int offset;
+        public void Send(string message) => Assert.True(messages.Writer.TryWrite(Encoding.UTF8.GetBytes(message)));
+        public void Complete(Exception? exception = null) => messages.Writer.Complete(exception);
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (offset == current.Length)
+            {
+                if (!await messages.Reader.WaitToReadAsync(cancellationToken)) return 0;
+                current = await messages.Reader.ReadAsync(cancellationToken);
+                offset = 0;
+            }
+            int count = Math.Min(buffer.Length, current.Length - offset);
+            current.AsMemory(offset, count).CopyTo(buffer);
+            offset += count;
+            return count;
+        }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedTransportCancelsActiveWorkAndWaitsForCleanup(bool cleanupFails)
+    {
+        using var source = new MessageStream();
+        using var destination = new MemoryStream();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleaningUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transportFailure = new IOException("transport read failed");
+        int calls = 0;
+        CancellationToken activeToken = default;
+        string directory = Directory.CreateTempSubdirectory("blast-mcp-failure-").FullName;
+        string outputPath = Path.Combine(directory, "unexpected.txt");
+        async Task<int> Runner(string[] args, TextWriter output, TextWriter error, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref calls) > 1)
+            {
+                File.WriteAllText(outputPath, "queued mutation");
+                return 0;
+            }
+            activeToken = cancellationToken;
+            entered.SetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                File.WriteAllText(outputPath, "active mutation");
+                return 0;
+            }
+            finally
+            {
+                cleaningUp.SetResult();
+                await releaseCleanup.Task;
+                cleanupFinished.SetResult();
+                if (cleanupFails) throw new IOException("secondary cleanup failure");
+            }
+        }
+        source.Send(Initialize + Call(2, "gb_cli", new { arguments = new[] { "version" } }) +
+            Call(3, "gb_cli", new { arguments = new[] { "version" } }));
+        var server = McpServer.ServeAsync(Runner, source, destination, timeout.Token);
+        try
+        {
+            await entered.Task.WaitAsync(timeout.Token);
+            source.Complete(transportFailure);
+            await cleaningUp.Task.WaitAsync(timeout.Token);
+            Assert.True(activeToken.IsCancellationRequested);
+            Assert.False(server.IsCompleted);
+            releaseCleanup.SetResult();
+            var failure = await Assert.ThrowsAsync<IOException>(() => server.WaitAsync(timeout.Token));
+            Assert.Same(transportFailure, failure);
+            Assert.True(cleanupFinished.Task.IsCompletedSuccessfully);
+            Assert.Equal(1, calls);
+            Assert.False(File.Exists(outputPath));
+        }
+        finally
+        {
+            releaseCleanup.TrySetResult();
+            await timeout.CancelAsync();
+            try { await server; }
+            catch (Exception) { }
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task EndOfInputDrainsWorkWithoutCancellingItsToken()
+    {
+        using var source = new MessageStream();
+        using var destination = new MemoryStream();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<int> Runner(string[] args, TextWriter output, TextWriter error, CancellationToken cancellationToken)
+        {
+            entered.SetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            Assert.False(cancellationToken.IsCancellationRequested);
+            return await CliApplication.RunAsync(args, output, error, cancellationToken);
+        }
+        source.Send(Initialize + Call(2, "gb_cli", new { arguments = new[] { "version" } }));
+        var server = McpServer.ServeAsync(Runner, source, destination, timeout.Token);
+        await entered.Task.WaitAsync(timeout.Token);
+        source.Complete();
+        release.SetResult();
+        Assert.Equal(0, await server.WaitAsync(timeout.Token));
+        var responses = Encoding.UTF8.GetString(destination.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.False(JsonNode.Parse(responses[1])!["result"]!["isError"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task CancelsActiveAndQueuedCallsThenContinuesSerialExecution()
+    {
+        using var source = new MessageStream();
+        using var destination = new MemoryStream();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int calls = 0, active = 0, maximumActive = 0;
+        async Task<int> Runner(string[] args, TextWriter output, TextWriter error, CancellationToken cancellationToken)
+        {
+            int count = Interlocked.Increment(ref calls);
+            maximumActive = Math.Max(maximumActive, Interlocked.Increment(ref active));
+            try
+            {
+                if (count == 1)
+                {
+                    entered.SetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                return await CliApplication.RunAsync(args, output, error, cancellationToken);
+            }
+            finally { Interlocked.Decrement(ref active); }
+        }
+        source.Send(Initialize + Call(2, "gb_cli", new { arguments = new[] { "version" } }));
+        var server = McpServer.ServeAsync(Runner, source, destination);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        source.Send(Call(3, "gb_cli", new { arguments = new[] { "version" } }) +
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":3e0}}\n" +
+            Call(4, "gb_cli", new { arguments = new[] { "version" } }) +
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":2}}\n");
+        source.Complete();
+        Assert.Equal(0, await server.WaitAsync(TimeSpan.FromSeconds(10)));
+        var results = Encoding.UTF8.GetString(destination.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonNode.Parse(line)!).ToArray();
+        Assert.Equal(4, results.Length);
+        Assert.Equal("CANCELLED", results[1]["result"]!["structuredContent"]!["error"]!["code"]!.GetValue<string>());
+        Assert.Equal("CANCELLED", results[2]["result"]!["structuredContent"]!["error"]!["code"]!.GetValue<string>());
+        Assert.False(results[3]["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(2, calls);
+        Assert.Equal(1, maximumActive);
+    }
+
+    [Fact]
+    public async Task SaturatedQueueStillReadsCancellationNotifications()
+    {
+        using var source = new MessageStream();
+        using var destination = new MemoryStream();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int calls = 0;
+        async Task<int> Runner(string[] args, TextWriter output, TextWriter error, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                entered.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            return await CliApplication.RunAsync(args, output, error, cancellationToken);
+        }
+        source.Send(Initialize + Call(2, "gb_cli", new { arguments = new[] { "version" } }));
+        var server = McpServer.ServeAsync(Runner, source, destination);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        source.Send(string.Concat(Enumerable.Range(3, 140).Select(id => Call(id, "gb_cli", new { arguments = new[] { "version" } }))) +
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":2}}\n");
+        source.Complete();
+        Assert.Equal(0, await server.WaitAsync(TimeSpan.FromSeconds(10)));
+        var results = Encoding.UTF8.GetString(destination.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonNode.Parse(line)!).ToArray();
+        Assert.Equal(142, results.Length);
+        Assert.Contains(results, result => result["result"]?["structuredContent"]?["error"]?["code"]?.GetValue<string>() == "MCP_BUSY");
+        var cancelled = Assert.Single(results, result => result["id"]?.GetValue<int>() == 2);
+        Assert.Equal("CANCELLED", cancelled["result"]!["structuredContent"]!["error"]!["code"]!.GetValue<string>());
+    }
 
     [Theory]
     [InlineData("2025-06-18", "2025-06-18")]

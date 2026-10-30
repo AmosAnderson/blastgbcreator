@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:blast-gb:schema:game:1",
+  "title": "Original collection-game specification",
+  "type": "object",
+  "required": [
+    "title",
+    "mode",
+    "palette",
+    "map",
+    "objective"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "mode": {
+      "enum": [
+        "gb",
+        "gbc"
+      ]
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "palette": {
+      "type": "object",
+      "required": [
+        "background",
+        "ground",
+        "wall",
+        "player",
+        "collectible"
+      ],
+      "properties": {
+        "background": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "ground": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "wall": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "player": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "collectible": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        }
+      }
+    },
+    "map": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "items": {
+        "type": "string",
+        "minLength": 20,
+        "maxLength": 20,
+        "pattern": "^[#.PC]{20}$"
+      },
+      "description": "Runtime lint also requires exactly one player, 1\u201399 collectibles, and reachability of every collectible."
+    }
+  }
+}

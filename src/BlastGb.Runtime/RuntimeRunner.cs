@@ -6,7 +6,10 @@ namespace BlastGb.Runtime;
 
 public sealed record MemoryRange(int Address, int Length);
 public sealed record MemoryAssertion(int Address, int[] Bytes);
-public sealed record Assertions(IReadOnlyList<MemoryAssertion> Memory, IReadOnlyDictionary<string, int> Registers);
+public sealed record Assertions(IReadOnlyList<MemoryAssertion> Memory, IReadOnlyDictionary<string, int> Registers)
+{
+    public string? FramebufferSha256 { get; init; }
+}
 public sealed record RunOptions
 {
     public int Frames { get; init; } = 60;
@@ -15,6 +18,12 @@ public sealed record RunOptions
     public IReadOnlyList<string> Buttons { get; init; } = [];
     public int? Breakpoint { get; init; }
     public int MaxInstructions { get; init; } = 1_000_000;
+    public JsonElement? Until { get; init; }
+    public int TraceCapacity { get; init; }
+    public bool CaptureFramebuffer { get; init; }
+    public bool IncludeProvenance { get; init; }
+    public byte[]? BatterySave { get; init; }
+    public bool CaptureBatterySave { get; init; }
 }
 
 public sealed record AssertionCheck(string Kind, object Expected, object Actual, bool Passed)
@@ -37,6 +46,16 @@ public sealed record RunResult(
     public bool? BreakpointReached { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? InstructionSteps { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? UntilReached { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ExecutionTraceEntry>? Trace { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeProvenance? Provenance { get; init; }
+    [JsonIgnore]
+    public byte[]? Framebuffer { get; init; }
+    [JsonIgnore]
+    public byte[]? BatterySave { get; init; }
 }
 
 /// <summary>Bounded execution and assertions with no filesystem or console dependencies.</summary>
@@ -50,7 +69,7 @@ public static partial class RuntimeRunner
         cancellationToken.ThrowIfCancellationRequested();
         if (value is null) return new([], new Dictionary<string, int>());
         var input = value.Value;
-        ValidateFields(input, ["memory", "registers"], "assertion");
+        ValidateFields(input, ["memory", "registers", "framebufferSha256"], "assertion");
         var memory = new List<MemoryAssertion>();
         if (input.TryGetProperty("memory", out var expectedMemory))
         {
@@ -78,8 +97,15 @@ public static partial class RuntimeRunner
                 if (!registers.TryAdd(key, number)) throw new ArgumentException($"Duplicate register assertion {register.Name}.");
             }
         }
-        if (memory.Count == 0 && registers.Count == 0) throw new ArgumentException("An assertion file must contain at least one memory or register assertion.");
-        return new(memory, registers);
+        string? framebufferSha256 = null;
+        if (input.TryGetProperty("framebufferSha256", out var hash))
+        {
+            framebufferSha256 = hash.ValueKind == JsonValueKind.String ? hash.GetString() : null;
+            if (framebufferSha256 is null || framebufferSha256.Length != 64 || framebufferSha256.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+                throw new ArgumentException("framebufferSha256 must contain exactly 64 lowercase hexadecimal characters.");
+        }
+        if (memory.Count == 0 && registers.Count == 0 && framebufferSha256 is null) throw new ArgumentException("An assertion file must contain at least one memory, register, or framebuffer assertion.");
+        return new(memory, registers) { FramebufferSha256 = framebufferSha256 };
     }
 
     public static IReadOnlyList<AssertionCheck> CheckAssertions(EmulatorSession session, Assertions expected, CancellationToken cancellationToken = default)
@@ -99,6 +125,12 @@ public static partial class RuntimeRunner
             int[] actual = session.ReadMemory(item.Address, item.Bytes.Length, cancellationToken).Select(value => (int)value).ToArray();
             checks.Add(new("memory", item.Bytes, actual, actual.SequenceEqual(item.Bytes)) { Address = item.Address });
         }
+        if (expected.FramebufferSha256 is string expectedHash)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string actualHash = session.FramebufferSha256();
+            checks.Add(new("framebuffer", expectedHash, actualHash, actualHash == expectedHash));
+        }
         return checks;
     }
 
@@ -107,6 +139,8 @@ public static partial class RuntimeRunner
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(options);
         var expected = NormalizeAssertions(options.Assertions, cancellationToken);
+        var until = options.Until is null ? null : NormalizeUntil(options.Until.Value, options.MaxInstructions, cancellationToken);
+        ValidateTraceCapacity(options.TraceCapacity);
         if (options.Frames is < 1 or > 3600) throw new ArgumentException("frames must be an integer between 1 and 3600.");
         if (options.MaxInstructions is < 1 or > 10_000_000) throw new ArgumentException("max-instructions must be an integer between 1 and 10000000.");
         if (options.Breakpoint is < 0 or > 65535) throw new ArgumentException("Breakpoints require a mapped 16-bit CPU address.");
@@ -125,22 +159,36 @@ public static partial class RuntimeRunner
         if (memoryBytes > 65536) throw new ArgumentException("Memory ranges may total at most 65536 bytes.");
         cancellationToken.ThrowIfCancellationRequested();
         using var session = new EmulatorSession(rom);
+        if (options.BatterySave is not null) session.ImportBatterySave(options.BatterySave, cancellationToken);
+        if (options.CaptureBatterySave) _ = session.ExportBatterySave(cancellationToken);
         foreach (string button in options.Buttons) session.SetButton(button, true);
         double initialTicks = session.Ticks, targetTicks = initialTicks + options.Frames * EmulatorSession.FrameTicks;
         int frames = 0, instructions = 0;
+        bool stepping = options.Breakpoint is not null || until is not null || options.TraceCapacity > 0;
+        var trace = new ExecutionTrace(options.TraceCapacity);
         bool breakpointReached = options.Breakpoint is int address && session.Registers.PC == address;
-        string stopReason = breakpointReached ? "breakpoint" : "frame-budget";
-        while (session.Ticks < targetTicks && !breakpointReached)
+        bool untilReached = until is not null && CheckAssertions(session, until, cancellationToken).All(check => check.Passed);
+        string stopReason = untilReached ? "condition" : breakpointReached ? "breakpoint" : "frame-budget";
+        while (session.Ticks < targetTicks && !breakpointReached && !untilReached)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (options.Breakpoint is not null && instructions >= options.MaxInstructions)
+            if (stepping && instructions >= options.MaxInstructions)
             {
                 stopReason = "instruction-budget";
                 break;
             }
             double previousTicks = session.Ticks;
-            int events = session.RunUntil(options.Breakpoint is null ? targetTicks : previousTicks + 1, cancellationToken);
-            if (session.Ticks > previousTicks) instructions++;
+            int events = session.RunUntil(stepping ? previousTicks + 1 : targetTicks, cancellationToken);
+            if (session.Ticks > previousTicks)
+            {
+                instructions++;
+                trace.Add(session);
+                if (until is not null && CheckAssertions(session, until, cancellationToken).All(check => check.Passed))
+                {
+                    untilReached = true;
+                    stopReason = "condition";
+                }
+            }
             if ((events & 1) != 0) frames++;
             if (options.Breakpoint is int breakpoint && session.Registers.PC == breakpoint)
             {
@@ -156,7 +204,12 @@ public static partial class RuntimeRunner
         {
             Breakpoint = options.Breakpoint,
             BreakpointReached = options.Breakpoint is null ? null : breakpointReached,
-            InstructionSteps = options.Breakpoint is null ? null : instructions
+            InstructionSteps = stepping ? instructions : null,
+            UntilReached = until is null ? null : untilReached,
+            Trace = options.TraceCapacity == 0 ? null : trace.ToArray(),
+            Provenance = options.IncludeProvenance ? EmulatorSession.Provenance : null,
+            Framebuffer = options.CaptureFramebuffer ? session.Framebuffer() : null,
+            BatterySave = options.CaptureBatterySave ? session.ExportBatterySave(cancellationToken) : null
         };
     }
 

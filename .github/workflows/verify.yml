@@ -1,0 +1,76 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  dotnet:
+    name: .NET (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Restore locked dependencies
+        run: dotnet restore BlastGb.slnx --locked-mode
+      - name: Build with warnings as errors
+        run: dotnet build BlastGb.slnx -c Release --no-restore
+      - name: Check formatting
+        run: dotnet format BlastGb.slnx --no-restore --verify-no-changes
+      - name: Run tests without external tools
+        run: dotnet test BlastGb.slnx -c Release --no-build --no-restore
+      - name: Verify temporarily installed package
+        run: dotnet run --project eng/BlastGb.Verify -c Release --no-build --no-restore
+
+  rgbds:
+    name: Native RGBDS (Linux x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Fetch and verify local RGBDS toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rgbds_archive="$RUNNER_TEMP/rgbds-linux-x86_64.tar.xz"
+          rgbds_directory="$RUNNER_TEMP/rgbds-v1.0.4"
+          curl --fail --location --retry 3 --output "$rgbds_archive" https://github.com/gbdev/rgbds/releases/download/v1.0.4/rgbds-linux-x86_64.tar.xz
+          echo "3e19e50ea602e316be709160acaf0a708b1fa6d32d219ec541f244442895dbb7  $rgbds_archive" | sha256sum --check --strict
+          mkdir "$rgbds_directory"
+          tar -xJf "$rgbds_archive" -C "$rgbds_directory"
+          rgbasm_path="$(find "$rgbds_directory" -type f -name rgbasm -print -quit)"
+          test -n "$rgbasm_path"
+          rgbds_bin="$(dirname "$rgbasm_path")"
+          test -x "$rgbds_bin/rgbasm"
+          test -x "$rgbds_bin/rgblink"
+          echo "RGBDS_BIN=$rgbds_bin" >> "$GITHUB_ENV"
+      - name: Restore locked dependencies
+        run: dotnet restore BlastGb.slnx --locked-mode
+      - name: Build with warnings as errors
+        run: dotnet build BlastGb.slnx -c Release --no-restore
+      - name: Run native assembler and linker regressions
+        run: dotnet test BlastGb.slnx -c Release --no-build --no-restore
+      - name: Verify installed tool with packaged assembly example
+        run: dotnet run --project eng/BlastGb.Verify -c Release --no-build --no-restore

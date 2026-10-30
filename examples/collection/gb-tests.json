@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "startup image and player",
+      "rom": "build/game.gb",
+      "assert": "checks.json",
+      "frames": 10
+    },
+    {
+      "name": "collect and win",
+      "rom": "build/game.gb",
+      "script": "debug.json"
+    }
+  ]
+}

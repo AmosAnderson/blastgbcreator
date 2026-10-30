@@ -31,6 +31,8 @@ public sealed record DebugSnapshot(double Ticks, CpuRegisters Registers, int[] B
 /// </summary>
 public sealed class EmulatorSession : IDisposable
 {
+    public const string EngineSha256 = "52c165069441a09180b4bd63464318aa7b861b1d36e0d05e8047b48619fd2f0b";
+    public static RuntimeProvenance Provenance { get; } = new("binjgb", EngineSha256);
     public const int ClockRate = 4_194_304;
     public const int FrameTicks = 70_224;
     // Compile once for the process. Each session owns a separate disposable store;
@@ -43,6 +45,7 @@ public sealed class EmulatorSession : IDisposable
     private readonly int romPointer;
     private readonly int emulator;
     private readonly int joypad;
+    private readonly int cartridgeType;
     private readonly Func<int, double> getTicks;
     private readonly Func<int, double, int> runUntil;
     private readonly Func<int, int>[] getRegisters;
@@ -82,6 +85,7 @@ public sealed class EmulatorSession : IDisposable
         ArgumentNullException.ThrowIfNull(rom);
         if (rom.Length is < 0x150 or > 8 * 1024 * 1024)
             throw new ArgumentException("Choose a Game Boy ROM between 336 bytes and 8 MB.", nameof(rom));
+        cartridgeType = rom[0x147];
         var compiled = Compiled.Value;
         store = new Store(compiled.Engine);
         try
@@ -177,6 +181,72 @@ public sealed class EmulatorSession : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             writeMemory(emulator, address + index, bytes[index]);
         }
+    }
+
+    /// <summary>Loads the engine's exact raw battery-RAM image. Timer/RTC and unusual save formats are unsupported.</summary>
+    public void ImportBatterySave(ReadOnlySpan<byte> data, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateBatteryCartridge();
+        int file = NewBatteryFile();
+        try
+        {
+            int length = instance.GetFunction<int, int>("ma")!(file);
+            if (data.Length != length) throw new ArgumentException($"Battery save must contain exactly {length} bytes for this cartridge.", nameof(data));
+            data.CopyTo(memory.GetSpan(instance.GetFunction<int, int>("la")!(file), length));
+            cancellationToken.ThrowIfCancellationRequested();
+            if (instance.GetFunction<int, int, int>("m")!(emulator, file) != 0)
+                throw new InvalidOperationException("The emulator rejected the battery save.");
+        }
+        finally { DeleteBatteryFile(file); }
+    }
+
+    /// <summary>Copies raw battery RAM; no host file is read or written.</summary>
+    public byte[] ExportBatterySave(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateBatteryCartridge();
+        int file = NewBatteryFile();
+        try
+        {
+            if (instance.GetFunction<int, int, int>("n")!(emulator, file) != 0)
+                throw new InvalidOperationException("The emulator could not export battery RAM.");
+            int length = instance.GetFunction<int, int>("ma")!(file);
+            cancellationToken.ThrowIfCancellationRequested();
+            return memory.GetSpan(instance.GetFunction<int, int>("la")!(file), length).ToArray();
+        }
+        finally { DeleteBatteryFile(file); }
+    }
+
+    private void ValidateBatteryCartridge()
+    {
+        if (cartridgeType is 0x0f or 0x10)
+            throw new ArgumentException("Battery saves for timer cartridges are unsupported because the engine's public RAM format omits RTC state.");
+        if (cartridgeType is not (0x03 or 0x06 or 0x09 or 0x13 or 0x1b or 0x1e))
+            throw new ArgumentException("Battery saves require a supported non-timer MBC1, MBC2, ROM+RAM, MBC3, or MBC5 battery cartridge.");
+    }
+
+    private int NewBatteryFile()
+    {
+        int file = instance.GetFunction<int, int>("ja")!(emulator);
+        if (file == 0) throw new InvalidOperationException("The emulator could not allocate a battery-save buffer.");
+        int length = instance.GetFunction<int, int>("ma")!(file);
+        int pointer = instance.GetFunction<int, int>("la")!(file);
+        if (length is < 1 or > 131072 || pointer == 0)
+        {
+            DeleteBatteryFile(file);
+            throw new InvalidOperationException("The cartridge has no supported battery RAM.");
+        }
+        return file;
+    }
+
+    private void DeleteBatteryFile(int file)
+    {
+        // file_data_delete frees its payload, but the public API leaves the FileData allocation to the caller.
+        try { instance.GetAction<int>("g")!(file); }
+        finally { instance.GetAction<int>("h")!(file); }
     }
 
     public void SetButton(string button, bool pressed)

@@ -6,10 +6,10 @@ namespace BlastGb.Cli;
 /// <summary>Versioned command discovery and JSON Schemas embedded in the executable.</summary>
 public static class AutomationContracts
 {
-    public const string Version = "0.4.0";
+    public const string Version = "0.4.1";
     private static readonly JsonObject Capabilities = ReadResource("capabilities");
     private static readonly JsonObject Help = ReadResource("help");
-    private static readonly string[] Names = ["project", "envelope", "patches", "assertions", "debug"];
+    private static readonly string[] Names = ["project", "envelope", "patches", "assertions", "debug", "game", "suite"];
     private static readonly IReadOnlyDictionary<string, JsonObject> Schemas =
         Names.ToDictionary(name => name, ReadResource, StringComparer.Ordinal);
 

@@ -17,6 +17,8 @@ gb schema project --json
 gb schema patches --json
 gb schema assertions --json
 gb schema debug --json
+gb schema game --json
+gb schema suite --json
 ```
 
 Every ordinary command supports `--json` and returns one object containing
@@ -105,7 +107,7 @@ runtime addresses are different coordinate systems.
 `gb debug ROM --script FILE --json` executes an ordered debugger script. Discover
 its schema before writing commands. Bus writes alter the current runtime's RAM,
 I/O, or mapper state; they do not edit the cartridge. Each invocation starts a new
-emulator. Battery saves and save states are not persisted.
+emulator. Use explicit `--save-input`/`--save-output` for supported raw battery RAM. Save states and RTC save formats are unsupported.
 
 ## Optional local MCP transport
 
@@ -143,7 +145,7 @@ the utility.
 | Tool              | Arguments                                           | Result                                                            |
 | ----------------- | --------------------------------------------------- | ----------------------------------------------------------------- |
 | `gb_capabilities` | `{}`                                                | The same command catalog as `gb capabilities --json`              |
-| `gb_schema`       | `{ "name": "project" }`                             | One of `envelope`, `project`, `patches`, `assertions`, or `debug` |
+| `gb_schema`       | `{ "name": "project" }`                             | One of `envelope`, `project`, `patches`, `assertions`, `debug`, `game`, or `suite` |
 | `gb_cli`          | `{ "arguments": ["rom", "info", "/path/game.gb"] }` | Any ordinary CLI command, with JSON mode forced                   |
 
 Tool results include `structuredContent.exitCode` and
@@ -159,9 +161,13 @@ stdio surface for MCP `2025-06-18` and `2025-11-25`. It supports `initialize`,
 `notifications/initialized`, `ping`, `tools/list`, and `tools/call`. An unsupported
 requested version negotiates `2025-11-25`; clients must accept that version or
 disconnect. It does not implement the `2026-07-28` discovery protocol, HTTP,
-resources, prompts, tasks, sampling, or progress. Tool calls execute serially;
-cancellation notifications do not interrupt a CLI operation or file transaction.
-Close stdin to shut down after the current command finishes.
+resources, prompts, tasks, sampling, or progress. Tool calls execute serially. Send `notifications/cancelled` with the original
+`requestId` to cancel an active or queued tool call. Runtime and RGBDS work honor
+the request token; an artifact commit already in progress finishes or rolls back
+as a transaction. At most 128 queued messages are retained; additional tool calls
+return `MCP_BUSY` and may reply out of order. Close stdin to drain queued work and
+shut down. A transport failure cancels active and queued work and waits for cleanup
+before returning the original error. All stdout writes remain serialized.
 
 Messages are UTF-8 JSON, one per newline. Stdout contains only protocol messages.
 Each request is limited to 2 MiB; CLI arguments are limited to 1–4,096 strings,
@@ -174,3 +180,17 @@ The transport follows the MCP specification's
 [stdio framing](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports),
 [initialization lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
 and [tools contract](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+
+## Regression workflows
+
+Use `gb doctor --json` before diagnosing tool discovery or runtime issues.
+`gb project test DIRECTORY --build --overwrite --json` prevalidates a complete
+suite, builds its project, and executes independent named cases. `gb schema suite`
+defines case paths and aggregate bounds; malformed later cases prevent all builds.
+
+Use debug `buttons` operations to press and release input, and `run.until` for
+bounded after-step memory/register conditions. `--screenshot FILE.png` captures
+final evidence even when assertions fail. Framebuffer assertions compare raw
+RGBA hashes, so retain `--provenance`, exact budgets, and the original baseline.
+Use `rom diff BEFORE AFTER --patch-output FILE` for complete guarded equal-length
+patches; diagnostic preview limits do not apply to the exported file.

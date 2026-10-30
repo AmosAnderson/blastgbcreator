@@ -85,6 +85,8 @@ public static partial class CliApplication
         {
             [ManifestFile] = TextBytes(JsonText(manifest)),
             ["game.json"] = TextBytes(JsonText(spec)),
+            ["checks.json"] = TextBytes("{\"memory\":[{\"address\":49152,\"bytes\":[9]}]}\n"),
+            ["gb-tests.json"] = TextBytes("{\"version\":1,\"cases\":[{\"name\":\"initial player position\",\"rom\":\"build/game.gb\",\"assert\":\"checks.json\",\"frames\":10}]}\n"),
             ["README.md"] = TextBytes($"# {name}\n\n{(kind == "source" ? "Edit source/main.asm, then build with RGBDS installed." : "Edit game.json, then build with the built-in compiler.")}\n\nBuild: gb build \"{target}\" --json\nInspect: gb project resolve \"{target}\" --json\nRepeat builds with --overwrite. The project manifest is gb-project.json.\n")
         };
         if (kind == "source") files["source/main.asm"] = TextBytes(initial.Source);

@@ -15,6 +15,11 @@ public static partial class CliApplication
             case "init": return InitializeProject(parsed);
             case "import": return ImportProject(parsed);
             case "resolve": return ResolveProject(parsed);
+            case "suite": return await TestSuiteAsync(parsed, cancellationToken);
+            case "doctor": return await DiagnoseAsync(parsed, cancellationToken);
+            case "lint": return LintGame(parsed);
+            case "tiles-import":
+            case "tiles-export": return ConvertTiles(parsed);
             case "build":
                 if (parsed.Invocation == "asm compile")
                 {
@@ -67,25 +72,34 @@ public static partial class CliApplication
     private static JsonObject DisassembleCartridge(ParsedCommand parsed)
     {
         parsed.RequirePositionals(1);
-        parsed.AllowOptions("output", "overwrite", "offset", "count");
+        parsed.AllowOptions("output", "overwrite", "offset", "count", "symbols", "label");
         var path = Path.GetFullPath(parsed.Positionals[0]);
         var rom = RomFile(path);
-        var offset = Integer(parsed.Option("offset") ?? "0x100", "offset", rom.Length - 1);
+        var table = ReadSymbols(parsed);
+        if (parsed.Has("label") && parsed.Has("offset")) throw new CliException("USAGE", "Choose either --label or --offset.");
+        var offset = parsed.Option("label") is { } label
+            ? ResolveSymbol(table, label).RomOffset ?? throw new CliException("USAGE", "The selected symbol is not in cartridge ROM.")
+            : Integer(parsed.Option("offset") ?? "0x100", "offset", rom.Length - 1);
+        if (offset >= rom.Length) throw new CliException("USAGE", "The symbol is beyond the cartridge length.");
         var count = Integer(parsed.Option("count") ?? "64", "count", 1_000_000);
         if (count == 0) throw new CliException("USAGE", "count must be at least 1.");
         var lines = RomTools.Disassemble(rom, offset, count);
+        var annotated = JsonSerializer.SerializeToNode(lines, JsonDefaults.Options)!.AsArray();
+        if (table is not null)
+            foreach (var line in annotated)
+                line!["labels"] = JsonSerializer.SerializeToNode(table.FindByRomOffset(line["offset"]!.GetValue<int>()).Select(symbol => symbol.Name).ToArray());
         if (parsed.Option("output") is { } destination)
         {
             var output = Path.GetFullPath(destination);
-            FileOperations.ProtectDestination(output, [path]);
-            var exact = !parsed.Has("offset") && !parsed.Has("count");
-            var text = exact ? RomTools.ExportDisassembly(rom) : FormatInstructionListing(JsonSerializer.SerializeToNode(lines, JsonDefaults.Options)!.AsArray()) + "\n";
+            FileOperations.ProtectDestination(output, parsed.Option("symbols") is { } symbols ? [path, Path.GetFullPath(symbols)] : [path]);
+            var exact = !parsed.Has("offset") && !parsed.Has("count") && !parsed.Has("label");
+            var text = exact ? RomTools.ExportDisassembly(rom) : FormatInstructionListing(annotated) + "\n";
             FileOperations.AtomicWrite(output, text, parsed.Has("overwrite"));
             return exact
                 ? ToObject(new { output, format = "rgbds-byte-exact", size = rom.Length })
-                : ToObject(new { output, format = "instruction-listing", lines });
+                : ToObject(new { output, format = "instruction-listing", lines = annotated });
         }
-        return ToObject(new { path, offset, count = lines.Count, lines });
+        return ToObject(new { path, offset, count = lines.Count, lines = annotated });
     }
 
     private static JsonObject PatchCartridge(ParsedCommand parsed)
@@ -137,7 +151,8 @@ public static partial class CliApplication
     private static JsonObject DiffCartridges(ParsedCommand parsed)
     {
         parsed.RequirePositionals(2);
-        parsed.AllowOptions();
+        parsed.AllowOptions("patch-output", "overwrite");
+        if (parsed.Has("overwrite") && !parsed.Has("patch-output")) throw new CliException("USAGE", "--overwrite requires --patch-output.");
         var beforePath = Path.GetFullPath(parsed.Positionals[0]);
         var afterPath = Path.GetFullPath(parsed.Positionals[1]);
         var before = RomFile(beforePath);
@@ -161,7 +176,7 @@ public static partial class CliApplication
                     before.AsSpan(Math.Min(start, before.Length), Math.Max(0, Math.Min(Math.Min(32, length), before.Length - start))).ToArray(),
                     after.AsSpan(Math.Min(start, after.Length), Math.Max(0, Math.Min(Math.Min(32, length), after.Length - start))).ToArray(), length > 32));
         }
-        return ToObject(new
+        var data = ToObject(new
         {
             before = new { path = beforePath, size = before.Length, sha256 = Sha256(before) },
             after = new { path = afterPath, size = after.Length, sha256 = Sha256(after) },
@@ -174,23 +189,58 @@ public static partial class CliApplication
             rangesTruncated = rangeCount > ranges.Count,
             previewLimits = new { ranges = 64, bytesPerRange = 32 }
         });
+        if (parsed.Option("patch-output") is { } patchDestination)
+        {
+            var output = Path.GetFullPath(patchDestination);
+            FileOperations.ProtectDestination(output, [beforePath, afterPath]);
+            var patches = RomTools.CreatePatches(before, after);
+            FileOperations.AtomicWrite(output, JsonText(patches), parsed.Has("overwrite"));
+            data["patchOutput"] = output;
+            data["patchCount"] = patches.Count;
+        }
+        return data;
     }
 
     private static JsonObject DebugCartridge(ParsedCommand parsed, CancellationToken cancellationToken)
     {
         parsed.RequirePositionals(1);
-        parsed.AllowOptions("script");
+        parsed.AllowOptions("script", "symbols", "screenshot", "overwrite", "provenance", "save-input", "save-output");
         var script = parsed.Option("script") ?? throw new CliException("USAGE", "debug requires --script FILE.json. Use gb schema debug --json for its contract.");
         var input = Path.GetFullPath(parsed.Positionals[0]);
+        var inputs = RuntimeInputPaths(parsed, input);
+        ValidateRuntimeOutputs(parsed, inputs);
         var rom = RomFile(input);
-        return Merge(RuntimeRunner.Debug(rom, JsonFile(Path.GetFullPath(script)), cancellationToken), new { input, sha256 = Sha256(rom) });
+        var scriptValue = JsonFile(Path.GetFullPath(script));
+        var table = ReadSymbols(parsed);
+        if (table is not null)
+        {
+            var value = JsonNode.Parse(scriptValue.GetRawText())!;
+            if (value["commands"] is JsonArray commands)
+                foreach (var command in commands)
+                    if (command?["op"]?.GetValue<string>() == "breakpoints" && command["addresses"] is JsonArray addresses)
+                        for (int index = 0; index < addresses.Count; index++)
+                            if (addresses[index] is JsonValue address && address.TryGetValue<string>(out var label)) addresses[index] = ResolveSymbol(table, label).Address;
+            scriptValue = JsonSerializer.SerializeToElement(value, JsonDefaults.Options);
+        }
+        var result = RuntimeRunner.Debug(rom, scriptValue, new DebugOptions
+        {
+            CaptureFramebuffer = parsed.Has("screenshot"),
+            IncludeProvenance = parsed.Has("provenance"),
+            BatterySave = ReadBatterySave(parsed),
+            CaptureBatterySave = parsed.Has("save-output")
+        }, cancellationToken);
+        var data = Merge(result, new { input, sha256 = Sha256(rom) });
+        WriteRuntimeOutputs(parsed, result.Framebuffer, result.BatterySave, data, cancellationToken);
+        return data;
     }
 
     private static JsonObject RunCartridge(ParsedCommand parsed, CancellationToken cancellationToken)
     {
         parsed.RequirePositionals(1);
-        parsed.AllowOptions("frames", "memory", "assert", "buttons", "breakpoint", "max-instructions");
+        parsed.AllowOptions("frames", "memory", "assert", "buttons", "breakpoint", "max-instructions", "screenshot", "overwrite", "provenance", "until", "trace-capacity", "symbols", "save-input", "save-output");
         var input = Path.GetFullPath(parsed.Positionals[0]);
+        ValidateRuntimeOutputs(parsed, RuntimeInputPaths(parsed, input));
+        var table = ReadSymbols(parsed);
         var frames = Integer(parsed.Option("frames") ?? "60", "frames", 3600);
         if (frames == 0) throw new CliException("USAGE", "frames must be at least 1.");
         var ranges = new List<MemoryRange>();
@@ -216,9 +266,18 @@ public static partial class CliApplication
             Memory = ranges,
             Assertions = assertionPath is null ? null : JsonFile(Path.GetFullPath(assertionPath)),
             Buttons = parsed.Option("buttons")?.Split(',') ?? [],
-            Breakpoint = parsed.Option("breakpoint") is { } breakpoint ? Integer(breakpoint, "breakpoint", 0xffff) : null,
-            MaxInstructions = maxInstructions
+            Breakpoint = parsed.Option("breakpoint") is { } breakpoint ? BreakpointAddress(breakpoint, table) : null,
+            MaxInstructions = maxInstructions,
+            CaptureFramebuffer = parsed.Has("screenshot"),
+            IncludeProvenance = parsed.Has("provenance"),
+            Until = parsed.Option("until") is { } until ? JsonFile(Path.GetFullPath(until)) : null,
+            TraceCapacity = Integer(parsed.Option("trace-capacity") ?? "0", "trace-capacity", 1024),
+            BatterySave = ReadBatterySave(parsed),
+            CaptureBatterySave = parsed.Has("save-output")
         }, cancellationToken);
-        return Merge(result, new { input, sha256 = Sha256(rom) });
+        var data = Merge(result, new { input, sha256 = Sha256(rom) });
+        if (parsed.Option("breakpoint") is { } name && !IntegerPattern().IsMatch(name)) data["breakpointSymbol"] = JsonSerializer.SerializeToNode(ResolveSymbol(table, name), JsonDefaults.Options);
+        WriteRuntimeOutputs(parsed, result.Framebuffer, result.BatterySave, data, cancellationToken);
+        return data;
     }
 }

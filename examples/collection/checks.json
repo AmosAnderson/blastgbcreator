@@ -1,0 +1,12 @@
+{
+  "memory": [
+    {
+      "address": 49152,
+      "bytes": [
+        1,
+        1
+      ]
+    }
+  ],
+  "framebufferSha256": "a8c1e05f76ccd88c655cf732f6830b1ff77002c1d0ad96d347d69f287ac98196"
+}

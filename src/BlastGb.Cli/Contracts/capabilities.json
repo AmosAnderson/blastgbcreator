@@ -1,6 +1,6 @@
 {
   "name": "Blast GB Tools",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "schemaVersion": 1,
   "commands": [
     "rom info",
@@ -25,7 +25,12 @@
     "inspect",
     "verify",
     "disassemble",
-    "patch"
+    "patch",
+    "doctor",
+    "project test",
+    "game lint",
+    "tiles export",
+    "tiles import"
   ],
   "commandDefinitions": [
     {
@@ -87,9 +92,13 @@
       ],
       "options": [
         "json",
-        "help"
+        "help",
+        "patch-output",
+        "overwrite"
       ],
-      "sideEffects": []
+      "sideEffects": [
+        "write-patch-file-if-requested"
+      ]
     },
     {
       "name": "rom patch",
@@ -139,7 +148,9 @@
         "overwrite",
         "fix-checksums",
         "json",
-        "help"
+        "help",
+        "provenance",
+        "timeout-seconds"
       ],
       "sideEffects": [
         "execute-rgbds",
@@ -163,7 +174,9 @@
         "offset",
         "count",
         "json",
-        "help"
+        "help",
+        "symbols",
+        "label"
       ],
       "sideEffects": [
         "write-output-if-requested"
@@ -261,7 +274,9 @@
         "overwrite",
         "fix-checksums",
         "json",
-        "help"
+        "help",
+        "provenance",
+        "timeout-seconds"
       ],
       "sideEffects": [
         "execute-rgbds-for-assembly",
@@ -287,10 +302,19 @@
         "breakpoint",
         "max-instructions",
         "json",
-        "help"
+        "help",
+        "symbols",
+        "until",
+        "trace-capacity",
+        "screenshot",
+        "save-input",
+        "save-output",
+        "provenance",
+        "overwrite"
       ],
       "sideEffects": [
-        "execute-emulator"
+        "execute-emulator",
+        "write-capture-or-save-if-requested"
       ]
     },
     {
@@ -312,10 +336,19 @@
         "breakpoint",
         "max-instructions",
         "json",
-        "help"
+        "help",
+        "symbols",
+        "until",
+        "trace-capacity",
+        "screenshot",
+        "save-input",
+        "save-output",
+        "provenance",
+        "overwrite"
       ],
       "sideEffects": [
-        "execute-emulator"
+        "execute-emulator",
+        "write-capture-or-save-if-requested"
       ]
     },
     {
@@ -332,11 +365,18 @@
       "options": [
         "script",
         "json",
-        "help"
+        "help",
+        "symbols",
+        "screenshot",
+        "save-input",
+        "save-output",
+        "provenance",
+        "overwrite"
       ],
       "sideEffects": [
         "execute-emulator",
-        "write-runtime-bus-if-requested"
+        "write-runtime-bus-if-requested",
+        "write-capture-or-save-if-requested"
       ]
     },
     {
@@ -388,6 +428,103 @@
       ],
       "sideEffects": [
         "serve-stdio"
+      ]
+    },
+    {
+      "name": "doctor",
+      "description": "Report host/tool identities and perform a bundled runtime smoke check.",
+      "arguments": [],
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "execute-tool-version-probes",
+        "execute-emulator"
+      ]
+    },
+    {
+      "name": "project test",
+      "description": "Execute a bounded, named suite in independent emulator sessions.",
+      "arguments": [
+        {
+          "name": "suite",
+          "type": "path",
+          "required": false,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "build",
+        "overwrite",
+        "timeout-seconds",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "execute-emulator",
+        "write-build-artifacts-if-requested",
+        "execute-rgbds-for-assembly-build"
+      ]
+    },
+    {
+      "name": "game lint",
+      "description": "Validate GameSpec JSON with field paths and map coordinates.",
+      "arguments": [
+        {
+          "name": "game",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "json",
+        "help"
+      ],
+      "sideEffects": []
+    },
+    {
+      "name": "tiles export",
+      "description": "Export raw 2bpp tiles as an opaque four-shade PNG sheet.",
+      "arguments": [
+        {
+          "name": "tiles",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "output",
+        "overwrite",
+        "columns",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "write-image"
+      ]
+    },
+    {
+      "name": "tiles import",
+      "description": "Import a four-shade PNG sheet as raw 2bpp tiles.",
+      "arguments": [
+        {
+          "name": "image",
+          "type": "path",
+          "required": true,
+          "role": "input"
+        }
+      ],
+      "options": [
+        "output",
+        "overwrite",
+        "json",
+        "help"
+      ],
+      "sideEffects": [
+        "write-tiles"
       ]
     }
   ],
@@ -487,7 +624,7 @@
       ]
     },
     "breakpoint": {
-      "type": "integer",
+      "type": "address-or-symbol",
       "minimum": 0,
       "maximum": 65535,
       "description": "Mapped CPU program-counter address."
@@ -498,6 +635,72 @@
       "maximum": 10000000,
       "default": 1000000,
       "description": "Step budget while seeking a breakpoint."
+    },
+    "patch-output": {
+      "type": "path",
+      "role": "output",
+      "description": "Write every equal-length ROM difference as complete guarded patches; previews remain bounded."
+    },
+    "screenshot": {
+      "type": "path",
+      "role": "output",
+      "description": "Capture final 160x144 RGBA framebuffer as PNG, including failed assertion evidence."
+    },
+    "symbols": {
+      "type": "path",
+      "role": "input",
+      "description": "Read RGBDS symbols; named breakpoints use mapped addresses in any active bank."
+    },
+    "label": {
+      "type": "string",
+      "description": "Select a ROM symbol for disassembly; requires symbols and excludes offset."
+    },
+    "until": {
+      "type": "path",
+      "role": "input",
+      "schema": "assertions",
+      "description": "Stop at the first matching after-step memory/register condition; excludes framebuffer checks."
+    },
+    "trace-capacity": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1024,
+      "default": 0,
+      "description": "Retain the most recent instruction snapshots."
+    },
+    "provenance": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include toolkit and engine/tool identities; build input hashes are observed after compilation."
+    },
+    "timeout-seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 600,
+      "default": 120,
+      "description": "Deadline for each RGBDS build subprocess."
+    },
+    "columns": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 128,
+      "default": 1,
+      "description": "Tile-sheet columns; must divide tile count exactly."
+    },
+    "save-input": {
+      "type": "path",
+      "role": "input",
+      "description": "Load exact-sized raw battery RAM; timer saves and unsupported mappers are rejected."
+    },
+    "save-output": {
+      "type": "path",
+      "role": "output",
+      "description": "Write final raw battery RAM to a separate staged file."
+    },
+    "build": {
+      "type": "boolean",
+      "default": false,
+      "description": "Build the suite directory project before executing cases."
     }
   },
   "requiredOptions": {
@@ -509,6 +712,12 @@
     ],
     "debug": [
       "script"
+    ],
+    "tiles import": [
+      "output"
+    ],
+    "tiles export": [
+      "output"
     ]
   },
   "schemas": [
@@ -531,6 +740,14 @@
     {
       "name": "debug",
       "command": "gb schema debug --json"
+    },
+    {
+      "name": "game",
+      "command": "gb schema game --json"
+    },
+    {
+      "name": "suite",
+      "command": "gb schema suite --json"
     }
   ],
   "manifest": {
@@ -562,6 +779,8 @@
   "limitations": [
     "Disassembly cannot recover original symbols, comments, or code/data boundaries.",
     "Banked runtime breakpoints use mapped 16-bit addresses in any current bank.",
-    "Runtime tests are bounded emulator evidence, not hardware certification."
+    "Runtime tests are bounded emulator evidence, not hardware certification.",
+    "Raw battery saves exclude RTC data and support only explicitly validated battery-RAM mapper types.",
+    "Tile PNG import supports non-interlaced 8-bit opaque grayscale/RGB/indexed/RGBA with shades 255,170,85,0."
   ]
 }

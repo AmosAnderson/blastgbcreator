@@ -240,7 +240,10 @@ public sealed class RomToolsTests
         Assert.Contains("ROMX[$4000], BANK[8]", source);
         Assert.Contains("code/data and mapper state are unknown", source);
         Assert.Contains("not recovered source code", source);
-        Assert.Contains($"p.read_bytes()[:{rom.Length}]", source);
+        Assert.Contains($"original {rom.Length}-byte length", source);
+        Assert.Contains("linker map proves removed bytes are padding", source);
+        Assert.Contains("gb project import", source);
+        Assert.DoesNotContain("p.read_bytes()", source);
         var bytes = source.Split('\n').Where(line => line.StartsWith("    db ", StringComparison.Ordinal))
             .SelectMany(line => line[7..line.IndexOf(';', StringComparison.Ordinal)].Split(',').Select(value => Convert.ToByte(value.Trim()[1..], 16))).ToArray();
         Assert.Equal(rom, bytes);

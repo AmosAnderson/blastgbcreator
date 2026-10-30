@@ -20,12 +20,16 @@ on, with project/build/run/test utilities for the development loop.
 | `gb project init DIRECTORY`                 | Create editable source                                       |
 | `gb project import ROM DIRECTORY`           | Preserve a ROM and create editable data source               |
 | `gb project resolve [DIRECTORY]`            | Validate manifest and resolve paths without writing          |
+| `gb project test [DIRECTORY]`               | Run named cases, optionally building first                   |
+| `gb doctor`                                | Report host/tool identity and runtime health                 |
+| `gb game lint GAME.json`                    | Validate GameSpec with field and map diagnostics             |
+| `gb tiles import/export INPUT --output FILE` | Convert four-shade PNG sheets and raw 2bpp tiles             |
 | `gb build [PROJECT]`                        | Build a project, source file, or built-in GameSpec           |
 | `gb run ROM`                                | Execute bounded frames and inspect registers/memory          |
 | `gb test ROM --assert FILE`                 | Require and check memory/register assertions                 |
 | `gb debug ROM --script FILE`                | Run deterministic debugger commands                          |
 | `gb capabilities --json`                    | Discover commands, arguments, side effects, and contracts    |
-| `gb schema NAME --json`                     | Retrieve envelope/project/patch/assertion/debug JSON Schemas |
+| `gb schema NAME --json`                     | Retrieve versioned input and result JSON contracts           |
 | `gb mcp serve`                              | Serve local utilities to an AI agent over MCP stdio          |
 
 The former flat `init`, `import`, `inspect`, `verify`, `disassemble`, and `patch`
@@ -41,7 +45,7 @@ including grouped command names. Use the installed `gb` or invoke the compiled
 `gb.dll` directly when parsing stdout; `dotnet run` can print build diagnostics.
 
 Exit codes are 0 for success, 1 for an operation failure, 2 for invalid usage,
-and 3 for failed ROM verification, assertions, or an unreached breakpoint.
+and 3 for failed ROM verification, assertions, suites, lint, or an unreached breakpoint/condition.
 Numbers in command options accept decimal or `0x` hexadecimal. JSON integer
 fields also accept exact equivalent forms such as `1.0` and `1e0`; fractional
 and out-of-range values are rejected without rounding. Runtime addresses are
@@ -76,6 +80,12 @@ including every `INCLUDE`, `INCBIN`, and `READFILE` dependency reported by RGBDS
 Missing or ambiguous dependency reports stop the build before output replacement.
 Output artifacts must be distinct on the destination filesystem, including on
 case-insensitive and Unicode-normalizing volumes.
+
+Each RGBDS subprocess has a 120-second deadline. `--timeout-seconds N` accepts
+1–600 seconds. Timeout or cancellation kills its process tree before staging
+outputs; `BUILD_TIMEOUT` distinguishes deadline expiry from `CANCELLED`.
+`build --provenance` adds toolkit/compiler/tool identities and SHA-256 hashes of
+inputs observed after compilation. These hashes are not an atomic source snapshot.
 
 `gb asm compile ./main.asm --output ./build/game.gb --json` uses the same
 RGBDS build pipeline without a project manifest. For the built-in collection
@@ -132,6 +142,12 @@ removed bytes for unequal lengths. Previews contain at most 64 ranges and 32
 bytes per range. `rangesTruncated` and `previewTruncated` identify omissions;
 counts and hashes describe the complete files. A difference is a successful
 comparison, so it exits 0; `identical` tells an agent whether bytes match.
+
+`rom diff BEFORE AFTER --patch-output FILE.json [--overwrite]` also writes every
+changed range as complete guarded patches, independent of preview limits. The
+files must have equal lengths; insertion, removal, and expansion patches are not
+supported. Both cartridges are protected from destination collisions. The file
+can be applied with the ordinary `rom patch` command.
 
 ## Project manifest
 
@@ -230,4 +246,136 @@ set, and `run` continues until a breakpoint or a budget. `read` and `write` use
 the emulator's real CPU bus. Writes affect RAM, IO, or mapper state according
 to hardware semantics and preserve the cartridge file. Results retain operation
 evidence, final CPU state, and assertion outcomes. Sessions are ephemeral;
-battery saves and save states are not persisted.
+battery RAM is persisted only through explicit save input/output files; save states and RTC save formats are unsupported.
+
+## Input sequences, captures, and conditions
+
+`buttons` replaces the complete held-button set without advancing ticks. Use an
+empty set to release every button; input remains held across later operations:
+
+```json
+{"version":1,"commands":[
+  {"op":"frame","count":10},
+  {"op":"buttons","pressed":["right"]},
+  {"op":"frame","count":8},
+  {"op":"buttons","pressed":[]},
+  {"op":"assert","memory":[{"address":49152,"bytes":[2,1]}]}
+]}
+```
+
+`run`, `test`, and `debug` accept `--screenshot FILE.png` and `--provenance`.
+The PNG contains the final 160×144 framebuffer. Screenshots and saves are staged
+as one output batch, require separate destinations, and protect every consumed
+ROM, assertion, script, symbol, condition, and save input. Existing outputs
+require `--overwrite`. Failed assertions still permit captures of their evidence;
+cancellation and invalid inputs do not write captures.
+
+Assertion files and debug `assert` commands accept `framebufferSha256`, a
+lowercase 64-character SHA-256 of raw row-major RGBA pixels. It differs from the
+PNG file's hash. Retain the engine identity, cartridge hash, exact tick/step
+budgets, and baseline image when comparing results. Update baselines deliberately.
+
+`run` and `test` accept `--until CHECKS.json --max-instructions N`, which checks
+memory/register conditions initially and after each instruction/hardware step.
+The condition file has the assertion shape, excluding framebuffer checks.
+`--trace-capacity N` retains the most recent 0–1024 tick/register snapshots;
+requesting conditions or a trace enables instruction stepping and its budget.
+An unreached condition exits 3 and includes `untilReached:false` and the stopping
+budget. This polling does not detect every intermediate bus access.
+
+Debug `run` commands accept the same condition inline, plus a trace bound:
+
+```json
+{"op":"run","frames":60,"maxInstructions":100000,"traceCapacity":32,
+ "until":{"memory":[{"address":49152,"bytes":[42]}]}}
+```
+
+Unreached script conditions set `conditionsPassed:false`, stop later operations,
+and exit 3. Condition reads are limited to 16 MiB across the maximum instruction
+budget (including the initial check); script traces total at most 4096 entries.
+For example, a one-byte condition with one million steps fits this bound.
+
+## Symbols
+
+`asm decompile ROM --symbols FILE.sym --label Main --count 32` starts a candidate
+listing at a ROM label and annotates instruction starts with supplied labels.
+`--label` and `--offset` are mutually exclusive. RAM symbols cannot select ROM
+listings; labels outside the actual cartridge length fail.
+
+Valid exported numeric constants in `.sym` files are accepted and skipped.
+They have no bank or address space, so they cannot select listings or breakpoints.
+
+`run/test --symbols FILE.sym --breakpoint Main` resolves a named address. Debug
+scripts may use symbol strings in `breakpoints.addresses` when `--symbols` is
+supplied. Names are ordinal and case sensitive. Symbol banks support physical
+ROM lookup, but runtime breakpoints still match the mapped CPU address in **any
+active bank**; supplying a banked label does not impose a bank filter. No symbols
+or code/data boundaries are inferred from a cartridge.
+
+## Project test suites
+
+`gb project test [DIRECTORY|gb-tests.json]` validates all cases before allocating
+any emulator session. `--build` first builds the project in the suite directory;
+repeat builds require `--overwrite`. Its build artifacts are checked against all
+consumed suite/script/assertion files and unrelated input cartridges. Starter
+projects include a smoke test. The suite is a separate version-1 contract, so
+existing `gb-project.json` manifests are unchanged.
+
+```json
+{"version":1,"cases":[
+  {"name":"startup","rom":"build/game.gb","assert":"checks.json","frames":10},
+  {"name":"gameplay","rom":"build/game.gb","script":"debug.json"}
+]}
+```
+
+Paths must stay inside the suite directory, without symbolic links. Cases require
+unique names and exactly one `assert` or `script`. Assertion cases may specify
+`frames`, `buttons` (an array), `breakpoint` (numeric), and `maxInstructions`.
+Script cases use their own operations. Every case starts fresh; a failed case
+retains evidence and does not suppress later independent cases. Cancellation
+stops the suite. Case failures exit 3 with aggregate counts and individual results.
+
+At most 100 cases, 3600 frame budgets, 10 million stepping instructions, 1000
+script commands, 1 MiB of assertion/read/write memory, 16 MiB of condition reads,
+and 4096 trace entries are permitted across the suite. Discover exact fields with
+`gb schema suite --json`. See the runnable [collection example](../examples/collection/README.md).
+
+## Explicit battery RAM
+
+`run`, `test`, and `debug` accept `--save-input FILE.sav` and
+`--save-output NEW.sav`. Files contain raw cartridge RAM and must match the exact
+engine-reported size; inputs are limited to 128 KiB. Save input/output paths must
+be separate. Neither RAM writes nor save operations edit cartridge files.
+
+Supported cartridge type bytes are `03`, `06`, `09`, `13`, `1b`, and `1e` (non-timer
+MBC1/MBC2/ROM+RAM/MBC3/MBC5 battery variants). Timer MBC3 types `0f`/`10` and other
+formats are explicitly rejected: the pinned public API supplies RAM without RTC
+state. Save states are not implemented. Save output is opt-in and may capture a
+failed assertion's final state; use a new destination when retaining baselines.
+
+## Diagnostics, GameSpec, and graphics
+
+`gb doctor --json` reports .NET, OS, architecture, resolved RGBDS tool paths and
+versions, pinned emulator identity, and a tiny actual emulator smoke check.
+Missing optional RGBDS tools appear as `available:false`; the command can still
+succeed because ROM utilities and GameSpec builds do not require them. Version
+probes are bounded to five seconds. This command creates no project artifacts.
+
+`gb game lint GAME.json --json` reports independent specification errors with
+JSON Pointer paths and zero-based map row/column coordinates. Invalid specs exit
+3 without compiling or writing. `gb schema game --json` supports editor tooling;
+reachability and player/collectible counts also require semantic lint checks.
+The implemented collection-game mechanics are unchanged.
+
+`gb tiles export TILES.2bpp --output SHEET.png [--columns N]` converts raw 8×8,
+16-byte tiles into a four-shade PNG. Indices 0–3 map to grayscale 255,170,85,0.
+Columns default to 1 and must divide the tile count exactly; tile order is row
+major. `gb tiles import SHEET.png --output TILES.2bpp` performs the inverse.
+
+Imports accept non-interlaced, 8-bit grayscale, RGB, indexed, or RGBA PNGs with
+opaque pixels in those exact four shades and dimensions divisible by eight.
+Packed palette bit depths, color quantization, transparency, and other PNG
+features are unsupported. Inputs are bounded to 16 MiB, images to 1,048,576
+pixels, and tiles to 16,384. Outputs use the ordinary staged preservation rules.
+These tools operate on explicit asset files; they do not guess graphics locations
+inside ROMs.

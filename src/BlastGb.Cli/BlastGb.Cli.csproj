@@ -22,5 +22,6 @@
     <None Include="../../third_party/wasmtime/LICENSE;../../third_party/wasmtime/README.md" Pack="true" PackagePath="third_party/wasmtime/" />
     <None Include="../../examples/hello/README.md;../../examples/hello/*.json" Pack="true" PackagePath="examples/hello/" />
     <None Include="../../examples/hello/source/*.asm" Pack="true" PackagePath="examples/hello/source/" />
+    <None Include="../../examples/collection/README.md;../../examples/collection/*.json" Pack="true" PackagePath="examples/collection/" />
   </ItemGroup>
 </Project>

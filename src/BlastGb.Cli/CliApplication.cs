@@ -15,13 +15,15 @@ public static partial class CliApplication
     private const string ManifestFormat = "blast-gb-workspace";
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private static readonly JsonSerializerOptions PrettyJson = new(JsonDefaults.Options) { WriteIndented = true };
-    private static readonly HashSet<string> BooleanOptions = ["json", "overwrite", "fix-checksums", "allow-unguarded", "help", "version"];
-    private static readonly HashSet<string> OptionNames = [.. BooleanOptions, "output", "offset", "count", "name", "kind", "frames", "memory", "assert", "buttons", "breakpoint", "max-instructions", "script"];
+    private static readonly HashSet<string> BooleanOptions = ["json", "overwrite", "fix-checksums", "allow-unguarded", "help", "version", "provenance", "build"];
+    private static readonly HashSet<string> OptionNames = [.. BooleanOptions, "output", "offset", "count", "name", "kind", "frames", "memory", "assert", "buttons", "breakpoint", "max-instructions", "script", "patch-output", "screenshot", "symbols", "label", "until", "trace-capacity", "timeout-seconds", "columns", "save-input", "save-output"];
     private static readonly Dictionary<string, Dictionary<string, string>> Groups = new(StringComparer.Ordinal)
     {
         ["rom"] = new() { ["info"] = "inspect", ["verify"] = "verify", ["patch"] = "patch", ["diff"] = "diff" },
         ["asm"] = new() { ["compile"] = "build", ["decompile"] = "disassemble" },
-        ["project"] = new() { ["init"] = "init", ["import"] = "import", ["resolve"] = "resolve", ["info"] = "resolve" },
+        ["project"] = new() { ["init"] = "init", ["import"] = "import", ["resolve"] = "resolve", ["info"] = "resolve", ["test"] = "suite" },
+        ["game"] = new() { ["lint"] = "lint" },
+        ["tiles"] = new() { ["import"] = "tiles-import", ["export"] = "tiles-export" },
         ["mcp"] = new() { ["serve"] = "mcp" }
     };
 
@@ -120,7 +122,7 @@ public static partial class CliApplication
                 return 0;
             }
             var data = await ExecuteAsync(parsed, cancellationToken);
-            var failed = IsFalse(data["valid"]) || IsFalse(data["assertionsPassed"]) || IsFalse(data["breakpointReached"]);
+            var failed = IsFalse(data["valid"]) || IsFalse(data["assertionsPassed"]) || IsFalse(data["breakpointReached"]) || IsFalse(data["untilReached"]) || IsFalse(data["conditionsPassed"]);
             if (wantsJson)
             {
                 var envelope = new JsonObject { ["schemaVersion"] = 1, ["command"] = command, ["ok"] = !failed, ["data"] = data };
@@ -197,5 +199,6 @@ public static partial class CliApplication
     private static partial Regex IntegerPattern();
 
     private static string FormatInstructionListing(JsonArray lines) => string.Join('\n', lines.Select(line =>
-        $"{line!["offset"]!.GetValue<int>():X6}  {string.Join(' ', line["bytes"]!.AsArray().Select(value => value!.GetValue<int>().ToString("X2", CultureInfo.InvariantCulture))).PadRight(8)}  {line["text"]!.GetValue<string>()}"));
+        $"{line!["offset"]!.GetValue<int>():X6}  {string.Join(' ', line["bytes"]!.AsArray().Select(value => value!.GetValue<int>().ToString("X2", CultureInfo.InvariantCulture))).PadRight(8)}  {line["text"]!.GetValue<string>()}" +
+        (line["labels"] is JsonArray { Count: > 0 } labels ? " ; " + string.Join(", ", labels.Select(label => label!.GetValue<string>())) : "")));
 }

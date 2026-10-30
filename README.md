@@ -17,7 +17,7 @@ Build and install the .NET tool into a local directory:
 
 ```sh
 dotnet pack src/BlastGb.Cli -c Release -o artifacts/packages
-dotnet tool install BlastGb.Tools --version 0.4.0 --tool-path ./artifacts/tools --add-source ./artifacts/packages
+dotnet tool install BlastGb.Tools --version 0.4.1 --tool-path ./artifacts/tools --add-source ./artifacts/packages
 ./artifacts/tools/gb --help
 ```
 
@@ -40,6 +40,10 @@ Install [RGBDS](https://rgbds.gbdev.io/) with `rgbasm` and `rgblink` on PATH, or
 | `gb project init DIRECTORY` | Create editable original assembly source |
 | `gb project import ROM DIRECTORY` | Preserve an original cartridge and create a mod project |
 | `gb project resolve DIRECTORY` | Inspect a manifest and its paths without writing |
+| `gb project test DIRECTORY` | Run named assertion/gameplay cases, optionally building first |
+| `gb doctor` | Diagnose host, RGBDS tools, and bundled runtime |
+| `gb game lint GAME.json` | Report GameSpec errors without building |
+| `gb tiles import/export INPUT --output FILE` | Convert four-shade PNG sheets and raw 2bpp tiles |
 | `gb build [PROJECT]` | Build a project, assembly file, or GameSpec JSON |
 | `gb run ROM` | Run bounded emulation and capture execution evidence |
 | `gb test ROM --assert CHECKS.json` | Check expected memory and registers |
@@ -71,6 +75,8 @@ gb debug examples/hello/build/hello.gb --script examples/hello/debug.json --json
 
 Use `--overwrite` when rebuilding existing artifacts.
 
+Starter projects include `gb-tests.json` and a smoke assertion. Run `gb project test ./my-game --build --overwrite --json` to validate the suite, rebuild, and execute named cases in fresh sessions. The [collection regression example](examples/collection/README.md) demonstrates scripted input, a framebuffer baseline, screenshots, and generated guarded patches without RGBDS.
+
 ## Modify a cartridge
 
 ```sh
@@ -96,6 +102,8 @@ A patch file uses physical offsets and expected-byte guards:
 gb rom patch ./game.gb ./patches.json --output ./modified.gb --fix-checksums --json
 ```
 
+Use `gb rom diff BEFORE AFTER --patch-output changes.json --json` to generate complete guarded patches from equal-length ROMs. Preview limits never truncate the patch file.
+
 Every guard must match before writing. Overlapping and out-of-range patches fail. Omitted guards require `--allow-unguarded`. Source, original, manifest, and RGBDS `INCLUDE`/`INCBIN`/`READFILE` inputs are protected from output collisions, including symbolic-link aliases. Multi-file builds stage all artifacts, reject filesystem aliases, and restore earlier outputs if a commit fails. Project `patches.json` records changes; source builds do not automatically reapply it.
 
 ## Test and debug
@@ -111,7 +119,7 @@ gb test ./game.gb --frames 10 --assert ./checks.json --json
 gb run ./game.gb --breakpoint 0x150 --max-instructions 100000 --json
 ```
 
-Results report the cartridge SHA-256, frame events, ticks, CPU registers, requested memory, framebuffer SHA-256, and assertions. `--buttons right,A` holds buttons during a run. Each frame budget is 70,224 ticks; actual video frame events can differ during initialization or CGB timing.
+Results report the cartridge SHA-256, frame events, ticks, CPU registers, requested memory, framebuffer SHA-256, and assertions. Add `--screenshot capture.png` for a PNG, and `--provenance` for toolkit and pinned engine identity. Assertion files may include `framebufferSha256`; it hashes raw RGBA pixels, not PNG bytes. `--until checks.json --max-instructions N --trace-capacity 32` polls bounded memory/register conditions and retains a recent trace. Unreached conditions exit 3. `--buttons right,A` holds buttons during a run. Each frame budget is 70,224 ticks; actual video frame events can differ during initialization or CGB timing.
 
 An ordered debugger script:
 
@@ -133,7 +141,7 @@ gb debug ./game.gb --script ./debug.json --json
 gb schema debug --json
 ```
 
-Operations include `step`, `frame`, `read`, `write`, `breakpoints`, `run`, and `assert`. The entire script and aggregate budgets are validated before execution. Failed assertions stop later operations. Breakpoints match mapped 16-bit PC addresses in the active bank; a newly set current-PC breakpoint stops before execution, and a subsequent run resumes past that stop. A step may be a HALT/DMA hardware step. Writes affect temporary emulated RAM/IO/mapper state. Every invocation starts a fresh session; save states and battery saves are not persisted.
+Operations include `step`, `frame`, `read`, `write`, `breakpoints`, `buttons`, `run`, and `assert`. The entire script and aggregate budgets are validated before execution. Failed assertions stop later operations. Breakpoints match mapped 16-bit PC addresses in the active bank; a newly set current-PC breakpoint stops before execution, and a subsequent run resumes past that stop. A step may be a HALT/DMA hardware step. Writes affect temporary emulated RAM/IO/mapper state. Every invocation starts a fresh session. Explicit `--save-input` and `--save-output` files load and capture supported raw battery RAM; save states and RTC saves are not supported.
 
 ## Agents and libraries
 
@@ -159,9 +167,9 @@ dotnet run --project eng/BlastGb.Verify
 dotnet format BlastGb.slnx --verify-no-changes
 ```
 
-The SDK and NuGet dependencies are pinned. NuGet restores into the ignored `.packages/` directory. `dotnet restore --locked-mode` verifies dependency locks. The package verifier packs the tool, installs it in a temporary directory, and runs real cartridge, compiler, and debugger workflows without a global installation.
+The SDK and NuGet dependencies are pinned. NuGet restores into the ignored `.packages/` directory. `dotnet restore --locked-mode` verifies dependency locks. The package verifier packs the tool, installs it in a temporary directory, and runs real cartridge, compiler, and debugger workflows without a global installation. Assembly subprocesses have a 120-second deadline; `--timeout-seconds 1..600` overrides it. `gb doctor --json` reports tool paths/versions and runtime health. `build --provenance` includes tool identities and dependency hashes observed after compilation, rather than promising an atomic source snapshot.
 
-Tests include byte-for-byte migration fixtures, all 512 opcodes, cartridge validation, input/output preservation, native RGBDS round trips, actual emulator execution, debugger scripts, and MCP framing. Native RGBDS checks require `RGBDS_BIN`. Physical hardware and Windows/Linux execution have not been verified here.
+Tests include byte-for-byte migration fixtures, all 512 opcodes, cartridge validation, input/output preservation, native RGBDS round trips, actual emulator execution, debugger scripts, and MCP framing. Native RGBDS checks require `RGBDS_BIN`. Physical hardware has not been verified. The checked-in CI workflow defines macOS/Linux/Windows package checks and a separate native RGBDS lane; local verification does not establish those remote jobs have passed.
 
 | Project | Responsibility |
 | --- | --- |

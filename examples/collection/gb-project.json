@@ -1,0 +1,8 @@
+{
+  "format": "blast-gb-workspace",
+  "version": 1,
+  "name": "Collection regression example",
+  "kind": "game",
+  "game": "game.json",
+  "output": "build/game.gb"
+}

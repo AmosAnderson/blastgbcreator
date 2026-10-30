@@ -23,14 +23,18 @@ internal sealed class RgbdsFixture : IDisposable
     private readonly string _directory = Directory.CreateTempSubdirectory("blast-core-rgbds-").FullName;
     public static bool IsAvailable => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RGBDS_BIN"));
 
-    public byte[] Assemble(string source)
+    public byte[] Assemble(string source) => Assemble(source, out _);
+
+    public byte[] Assemble(string source, out string symbols)
     {
         var sourcePath = Path.Combine(_directory, "main.asm");
         var objectPath = Path.Combine(_directory, "game.o");
         var romPath = Path.Combine(_directory, "game.gb");
+        var symbolPath = Path.Combine(_directory, "game.sym");
         File.WriteAllText(sourcePath, source);
         Run("rgbasm", "-o", objectPath, sourcePath);
-        Run("rgblink", "-o", romPath, objectPath);
+        Run("rgblink", "-n", symbolPath, "-o", romPath, objectPath);
+        symbols = File.ReadAllText(symbolPath);
         return File.ReadAllBytes(romPath);
     }
 

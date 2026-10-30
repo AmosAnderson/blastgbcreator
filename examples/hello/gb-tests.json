@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "writes 42 to work RAM",
+      "rom": "build/hello.gb",
+      "assert": "checks.json",
+      "frames": 10
+    },
+    {
+      "name": "instruction debugger",
+      "rom": "build/hello.gb",
+      "script": "debug.json"
+    }
+  ]
+}

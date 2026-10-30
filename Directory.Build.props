@@ -8,7 +8,7 @@
     <AnalysisLevel>latest</AnalysisLevel>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <NuGetLockFilePath Condition="'$(RuntimeIdentifier)' != ''">$(MSBuildProjectDirectory)/obj/$(RuntimeIdentifier)/packages.lock.json</NuGetLockFilePath>
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
   <ItemGroup>

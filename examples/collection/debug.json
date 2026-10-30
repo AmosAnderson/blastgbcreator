@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "op": "frame",
+      "count": 10
+    },
+    {
+      "op": "assert",
+      "memory": [
+        {
+          "address": 49152,
+          "bytes": [
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "op": "buttons",
+      "pressed": [
+        "right"
+      ]
+    },
+    {
+      "op": "frame",
+      "count": 8
+    },
+    {
+      "op": "buttons",
+      "pressed": []
+    },
+    {
+      "op": "assert",
+      "memory": [
+        {
+          "address": 49152,
+          "bytes": [
+            2,
+            1
+          ]
+        },
+        {
+          "address": 49155,
+          "bytes": [
+            0
+          ]
+        },
+        {
+          "address": 49157,
+          "bytes": [
+            1
+          ]
+        }
+      ]
+    }
+  ]
+}

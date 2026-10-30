@@ -229,6 +229,25 @@ public static class RomTools
         return repaired;
     }
 
+    /// <summary>Create complete, guarded contiguous changes between equal-length cartridges.</summary>
+    public static IReadOnlyList<RomPatch> CreatePatches(ReadOnlySpan<byte> before, ReadOnlySpan<byte> after)
+    {
+        CheckRom(before);
+        CheckRom(after);
+        if (before.Length != after.Length)
+            throw new ArgumentException("Guarded byte patches require equal-length ROMs; resizing must be handled explicitly.", nameof(after));
+        var patches = new List<RomPatch>();
+        var offset = 0;
+        while (offset < before.Length)
+        {
+            if (before[offset] == after[offset]) { offset++; continue; }
+            var start = offset;
+            while (offset < before.Length && before[offset] != after[offset]) offset++;
+            patches.Add(new RomPatch(start, after[start..offset].ToArray(), before[start..offset].ToArray()));
+        }
+        return patches.AsReadOnly();
+    }
+
     /// <summary>Validate every range against the original before applying any change to a copy.</summary>
     public static byte[] Patch(ReadOnlySpan<byte> rom, IReadOnlyList<RomPatch> patches, bool fixChecksums = false)
     {
@@ -266,8 +285,10 @@ public static class RomTools
             .Append("; Row boundaries may bisect real instructions; code/data and mapper state are unknown.\n")
             .Append("; This is not recovered source code. Header and checksum bytes are preserved.\n");
         if (rom.Length < 2 * RomBankSize || rom.Length % RomBankSize != 0)
-            source.Append("; Trim linker padding to preserve the exact original input length:\n")
-                .Append($"; python3 -c \"from pathlib import Path; p=Path('rebuilt.gb'); p.write_bytes(p.read_bytes()[:{rom.Length}])\"\n");
+            source.Append($"; To preserve the original {rom.Length}-byte length, use gb project import ORIGINAL_ROM PROJECT,\n")
+                .Append("; replace PROJECT/source/main.asm with this source, then run gb build PROJECT.\n")
+                .Append("; The project's romSize is enforced only after the linker map proves removed bytes are padding.\n")
+                .Append("; Do not truncate rebuilt ROMs without checking section bounds.\n");
         for (var bank = 0; bank * RomBankSize < rom.Length; bank++)
         {
             source.Append('\n').Append(bank == 0 ? "SECTION \"ROM bank 0\", ROM0[$0000]\n" : $"SECTION \"ROM bank {bank}\", ROMX[$4000], BANK[{bank}]\n");

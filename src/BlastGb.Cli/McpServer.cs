@@ -19,7 +19,8 @@ public static class McpServer
         Func<string[], TextWriter, TextWriter, CancellationToken, Task<int>> runCli,
         Stream input, Stream output, CancellationToken cancellationToken = default)
     {
-        var connection = new Connection(runCli, output, cancellationToken);
+        using var connectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var connection = new Connection(runCli, output, connectionCancellation.Token);
         using var pending = new MemoryStream();
         var buffer = new byte[64 * 1024];
         var oversized = false;
@@ -58,29 +59,79 @@ public static class McpServer
             }
             if (pending.Length != 0 && !oversized)
                 await connection.RpcErrorAsync(null, -32700, "A stdio message must end with a newline.");
+            await connection.DrainAsync();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return 0;
+        }
+        finally
+        {
+            // Every exit owns the lifetime of its workers. Preserve the original transport
+            // error while cancelling active calls and awaiting their cleanup before Dispose.
+            try { await connectionCancellation.CancelAsync(); }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException) { }
+            try { await connection.DrainAsync(); }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException) { }
         }
         return 0;
     }
 
     private sealed class Connection(
         Func<string[], TextWriter, TextWriter, CancellationToken, Task<int>> runCli,
-        Stream output, CancellationToken cancellationToken)
+        Stream output, CancellationToken cancellationToken) : IDisposable
     {
         private bool initialized;
         private bool ready;
+        private Task queued = Task.CompletedTask;
+        private readonly SemaphoreSlim queueSlots = new(128);
+        private readonly SemaphoreSlim outputLock = new(1);
+        private readonly Dictionary<string, CancellationTokenSource> requests = new(StringComparer.Ordinal);
+        private readonly object requestLock = new();
 
-        public Task RpcErrorAsync(JsonNode? id, int code, string message) => SendAsync(new JsonObject
+        public Task DrainAsync() => queued;
+
+        private async Task QueueAsync(Func<Task> action, Func<Task>? overloaded = null)
+        {
+            if (!queueSlots.Wait(0))
+            {
+                await (overloaded ?? action)();
+                return;
+            }
+            var previous = queued;
+            queued = Task.Run(async () =>
+            {
+                try
+                {
+                    await previous;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await action();
+                }
+                finally { queueSlots.Release(); }
+            }, CancellationToken.None);
+        }
+
+        public void Dispose()
+        {
+            lock (requestLock)
+            {
+                foreach (var source in requests.Values) source.Dispose();
+                requests.Clear();
+            }
+            queueSlots.Dispose();
+            outputLock.Dispose();
+        }
+
+        public Task RpcErrorAsync(JsonNode? id, int code, string message) => QueueAsync(() => SendAsync(new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["id"] = id?.DeepClone(),
             ["error"] = new JsonObject { ["code"] = code, ["message"] = message }
-        });
+        }));
 
-        private Task ResultAsync(JsonNode id, JsonNode result) => SendAsync(new JsonObject
+        private Task ResultAsync(JsonNode id, JsonNode result) => QueueAsync(() => SendResultAsync(id, result));
+
+        private Task SendResultAsync(JsonNode id, JsonNode result) => SendAsync(new JsonObject
         {
             ["jsonrpc"] = "2.0",
             ["id"] = id.DeepClone(),
@@ -100,9 +151,14 @@ public static class McpServer
                 };
                 bytes = JsonSerializer.SerializeToUtf8Bytes(message, JsonDefaults.Options);
             }
-            await output.WriteAsync(bytes, cancellationToken);
-            await output.WriteAsync("\n"u8.ToArray(), cancellationToken);
-            await output.FlushAsync(cancellationToken);
+            await outputLock.WaitAsync(cancellationToken);
+            try
+            {
+                await output.WriteAsync(bytes, cancellationToken);
+                await output.WriteAsync("\n"u8.ToArray(), cancellationToken);
+                await output.FlushAsync(cancellationToken);
+            }
+            finally { outputLock.Release(); }
         }
 
         public async Task ReceiveAsync(ReadOnlyMemory<byte> line)
@@ -128,6 +184,11 @@ public static class McpServer
             {
                 if (method == "notifications/initialized" && initialized)
                     ready = true;
+                if (method == "notifications/cancelled" && message["params"] is JsonObject cancelled && ValidId(cancelled["requestId"]))
+                {
+                    lock (requestLock)
+                        if (requests.TryGetValue(RequestKey(cancelled["requestId"]!), out var source)) source.Cancel();
+                }
                 return;
             }
             var id = message["id"];
@@ -207,29 +268,63 @@ public static class McpServer
                 await RpcErrorAsync(id, -32602, "Tool arguments must be an object.");
                 return;
             }
-            JsonObject result;
-            try
+            var requestKey = RequestKey(id!);
+            var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bool duplicate;
+            lock (requestLock) duplicate = !requests.TryAdd(requestKey, requestCancellation);
+            if (duplicate)
             {
-                result = name switch
+                requestCancellation.Dispose();
+                await RpcErrorAsync(id, -32600, "A tool call with this request id is already pending.");
+                return;
+            }
+            void CompleteRequest()
+            {
+                lock (requestLock) requests.Remove(requestKey);
+                requestCancellation.Dispose();
+            }
+            await QueueAsync(async () =>
+            {
+                try
                 {
-                    "gb_cli" when OnlyKeys(args, "arguments") => await InvokeAsync(args["arguments"]),
-                    "gb_cli" => ToolError("MCP_INVALID_ARGUMENTS", "gb_cli accepts only arguments."),
-                    "gb_capabilities" when OnlyKeys(args) => await InvokeAsync(new JsonArray("capabilities")),
-                    "gb_capabilities" => ToolError("MCP_INVALID_ARGUMENTS", "gb_capabilities accepts no arguments."),
-                    "gb_schema" when OnlyKeys(args, "name") && Text(args["name"]) is { } schema &&
-                        AutomationContracts.SchemaNames.Contains(schema, StringComparer.Ordinal) =>
-                        await InvokeAsync(new JsonArray("schema", schema)),
-                    _ => ToolError("MCP_INVALID_ARGUMENTS", $"name must be one of: {string.Join(", ", AutomationContracts.SchemaNames)}.")
-                };
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+                    JsonObject result;
+                    try
+                    {
+                        requestCancellation.Token.ThrowIfCancellationRequested();
+                        result = name switch
+                        {
+                            "gb_cli" when OnlyKeys(args, "arguments") => await InvokeAsync(args["arguments"], requestCancellation.Token),
+                            "gb_cli" => ToolError("MCP_INVALID_ARGUMENTS", "gb_cli accepts only arguments."),
+                            "gb_capabilities" when OnlyKeys(args) => await InvokeAsync(new JsonArray("capabilities"), requestCancellation.Token),
+                            "gb_capabilities" => ToolError("MCP_INVALID_ARGUMENTS", "gb_capabilities accepts no arguments."),
+                            "gb_schema" when OnlyKeys(args, "name") && Text(args["name"]) is { } schema &&
+                                AutomationContracts.SchemaNames.Contains(schema, StringComparer.Ordinal) =>
+                                await InvokeAsync(new JsonArray("schema", schema), requestCancellation.Token),
+                            _ => ToolError("MCP_INVALID_ARGUMENTS", $"name must be one of: {string.Join(", ", AutomationContracts.SchemaNames)}.")
+                        };
+                    }
+                    catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    {
+                        result = ToolError("CANCELLED", "The MCP request was cancelled.");
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        result = ToolError("MCP_COMMAND_FAILED", exception.Message);
+                    }
+                    await SendResultAsync(id!, result);
+                }
+                finally
+                {
+                    CompleteRequest();
+                }
+            }, async () =>
             {
-                result = ToolError("MCP_COMMAND_FAILED", exception.Message);
-            }
-            await ResultAsync(id!, result);
+                try { await SendResultAsync(id!, ToolError("MCP_BUSY", "The server already has 128 queued messages; retry after a pending call finishes.")); }
+                finally { CompleteRequest(); }
+            });
         }
 
-        private async Task<JsonObject> InvokeAsync(JsonNode? values)
+        private async Task<JsonObject> InvokeAsync(JsonNode? values, CancellationToken requestCancellation)
         {
             if (values is not JsonArray { Count: >= 1 and <= 4096 } arguments)
                 return ToolError("MCP_INVALID_ARGUMENTS", "arguments must contain 1..4096 strings.");
@@ -253,7 +348,7 @@ public static class McpServer
             var budget = new CaptureBudget();
             using var stdout = new CaptureWriter(budget);
             using var stderr = new CaptureWriter(budget);
-            var exitCode = await runCli([.. args], stdout, stderr, cancellationToken);
+            var exitCode = await runCli([.. args], stdout, stderr, requestCancellation);
             if (budget.Exceeded)
                 return ToolError("MCP_OUTPUT_LIMIT", "CLI output exceeded the 16 MiB response limit.");
             JsonObject? envelope;
@@ -270,6 +365,13 @@ public static class McpServer
     }
 
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+    private static string RequestKey(JsonNode id)
+    {
+        if (Text(id) is { } text) return "s:" + text;
+        using var parsed = JsonDocument.Parse(id.ToJsonString());
+        _ = JsonInteger.TryGetInt64(parsed.RootElement, out long number);
+        return "n:" + number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
     private static void ValidateJson(JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.Object)
