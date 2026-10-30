@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using BlastGb.Cli;
 using BlastGb.Core;
-using BlastGb.Runtime;
 
 namespace BlastGb.Cli.Tests;
 
@@ -95,18 +94,17 @@ public sealed class ContractRegressionTests : IDisposable
     }
 
     [Fact]
-    public async Task CancellationDuringRuntimeReturnsFailureAndPreservesCartridge()
+    public async Task CancelledRunReturnsFailureAndPreservesCartridge()
     {
         var rom = GameCompiler.Build(GameCompiler.CreateStarterSpec()).Rom;
-        // Warm the compiled module before scheduling cancellation during actual execution.
-        using (var session = new EmulatorSession(rom)) session.Advance(1);
         var path = Path.Combine(directory, "cancel.gb");
         File.WriteAllBytes(path, rom);
         using var cancellation = new CancellationTokenSource();
-        cancellation.CancelAfter(TimeSpan.FromMilliseconds(10));
+        // RuntimeRegressionTests cancel from frame/audio callbacks during execution.
+        // Test the CLI error contract here without relying on thread-pool timer scheduling.
+        cancellation.Cancel();
         using var output = new StringWriter();
         var status = await CliApplication.RunAsync(["run", path, "--frames", "3600", "--json"], output, TextWriter.Null, cancellation.Token);
-        Assert.True(cancellation.IsCancellationRequested);
         Assert.Equal(1, status);
         var result = JsonNode.Parse(output.ToString())!;
         Assert.False(result["ok"]!.GetValue<bool>());
